@@ -285,7 +285,6 @@ public class ClientMDS extends BaseClient {
      */
     public ClientMDS(final Context context, final String login, final String pwd) {
         this(context);
-        System.out.println(login+", "+pwd);
         this.getClient().getLogger().log(Level.FINEST, "Authentication with HTTP_BASIC : {0}/{1}", new Object[]{login, pwd});
         this.getClient().setChallengeResponse(ChallengeScheme.HTTP_BASIC, login, pwd);
     }

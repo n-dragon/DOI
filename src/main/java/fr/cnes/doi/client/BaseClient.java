@@ -17,8 +17,8 @@ import org.restlet.resource.ClientResource;
 import fr.cnes.doi.settings.ProxySettings;
 import fr.cnes.doi.utils.Utils;
 import java.util.List;
+import java.util.logging.Level;
 import java.util.logging.Logger;
-import org.restlet.data.ChallengeScheme;
 import org.restlet.data.Parameter;
 import org.restlet.engine.connector.ConnectorHelper;
 import org.restlet.util.Series;
@@ -44,6 +44,7 @@ public class BaseClient {
         final  List<ConnectorHelper<Client>> registeredClients = 
                 Engine.getInstance().getRegisteredClients();
         Engine.getInstance().getRegisteredClients().clear();
+        Engine.setLogLevel(Level.FINEST);
         registeredClients.add(new HttpClientHelperPatch(null));
         this.client = new ClientResource(uri);
         configureProxyIfNeeded();
@@ -55,7 +56,7 @@ public class BaseClient {
     private void configureProxyIfNeeded() {
         final ProxySettings proxySettings = ProxySettings.getInstance();
         if (proxySettings.isWithProxy()) {
-            this.setProxyAuthentication(proxySettings.getProxyHost(),
+            setProxyAuthentication(proxySettings.getProxyHost(),
                     proxySettings.getProxyPort(), proxySettings.getProxyUser(),
                     proxySettings.getProxyPassword());
         }
@@ -79,7 +80,6 @@ public class BaseClient {
         params.add("proxyHost", host);
         params.add("proxyPort", port);
         this.getClient().setNext(proxy);
-        //this.getClient().setProxyChallengeResponse(ChallengeScheme.HTTP_BASIC, login, pwd);
     }
     //TODO check io on ne peut pas utiliser the challenge authentication depuis que j'ai corrigé des problèmes
 
