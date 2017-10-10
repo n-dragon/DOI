@@ -21,6 +21,7 @@ import java.util.logging.Logger;
 import org.restlet.data.ChallengeScheme;
 import org.restlet.data.Parameter;
 import org.restlet.engine.connector.ConnectorHelper;
+import org.restlet.ext.httpclient.HttpClientHelper;
 import org.restlet.util.Series;
 
 /**
@@ -44,7 +45,7 @@ public class BaseClient {
         final  List<ConnectorHelper<Client>> registeredClients = 
                 Engine.getInstance().getRegisteredClients();
         //Engine.getInstance().getRegisteredClients().clear();
-        //registeredClients.add(new HttpClientHelperPatch(null));
+        registeredClients.add(new HttpClientHelper(null));
         this.client = new ClientResource(uri);
         configureProxyIfNeeded();
     }
