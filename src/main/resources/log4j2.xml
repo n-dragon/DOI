@@ -26,7 +26,7 @@
         <Logger name="fr.cnes.doi.logging.api">
             <AppenderRef ref="API"/>                        
         </Logger>
-        <Logger name="fr.cnes.doi.application" level="info">
+        <Logger name="fr.cnes.doi.application" level="trace">
             <AppenderRef ref="CONSOLE"/>
             <AppenderRef ref="FILE"/>            
         </Logger>
