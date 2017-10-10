@@ -43,7 +43,7 @@ public class BaseClient {
     public BaseClient(final String uri) {
         final  List<ConnectorHelper<Client>> registeredClients = 
                 Engine.getInstance().getRegisteredClients();
-        //Engine.getInstance().getRegisteredClients().clear();
+        Engine.getInstance().getRegisteredClients().clear();
         registeredClients.add(new HttpClientHelperPatch(null));
         this.client = new ClientResource(uri);
         configureProxyIfNeeded();
@@ -79,7 +79,7 @@ public class BaseClient {
         params.add("proxyHost", host);
         params.add("proxyPort", port);
         this.getClient().setNext(proxy);
-        this.getClient().setProxyChallengeResponse(ChallengeScheme.HTTP_BASIC, login, pwd);
+        //this.getClient().setProxyChallengeResponse(ChallengeScheme.HTTP_BASIC, login, pwd);
     }
     //TODO check io on ne peut pas utiliser the challenge authentication depuis que j'ai corrigé des problèmes
 
