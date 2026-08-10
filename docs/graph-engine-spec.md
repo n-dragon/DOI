@@ -29,6 +29,7 @@ latence.
 | Runtime | Serveur avec API réseau (pas de mode embarqué) |
 | Langage de requête | DSL de traversal type Cypher/Gremlin |
 | Opérations prioritaires | Voisinage k-hop filtré, pattern matching |
+| Agrégation | **Aucune dans le moteur** — délégation en aval (voir §7.1, §1.3) |
 | Ingestion | Batch externe (Spark/Flink → Iceberg), pas d'écriture directe via le serveur |
 | Cohérence | Éventuelle, snapshot isolation en lecture (time-travel Iceberg) |
 | Rafraîchissement d'index | Reconstruction complète périodique (pas d'incrémental) |
@@ -50,6 +51,12 @@ latence.
   délégués à un moteur externe (Spark/DataFusion) plutôt que réimplémentés.
 - Mode embarqué (librairie in-process) — hors scope, le moteur est un
   serveur réseau dès la v1.
+- **Agrégation** (`COUNT`, `SUM`, `AVG`, `GROUP BY`, `COLLECT`, etc.) — le
+  moteur reste un pur moteur de **traversal / pattern-matching**. Toute
+  agrégation sur les résultats est déléguée en aval, hors du moteur graphe
+  (côté client, ou via un moteur externe type DataFusion/Spark sur les
+  résultats bruts exportés/streamés). Décision actée explicitement plutôt
+  que TBD — voir détail §7.1.
 
 ---
 
@@ -309,7 +316,14 @@ schema graph_v1 {
     RETURN colleague, o
     ```
 - Hors scope v1 (noté explicitement, cf. §1.3 et §12) : `shortest path`,
-  algorithmes analytiques globaux, agrégations complexes multi-motifs.
+  algorithmes analytiques globaux.
+- **Pas d'agrégation** : le DSL ne comporte volontairement **aucune**
+  fonction d'agrégation (`COUNT`, `SUM`, `AVG`, `MIN`/`MAX`, `COLLECT`) ni
+  clause `GROUP BY`. `RETURN` ne fait que **projeter** les nœuds/arêtes/
+  propriétés matchés par le `MATCH`, sans les réduire ni les regrouper —
+  décision actée (§1.3), pas un TBD. Un besoin d'agrégation se traite en
+  aval de la réponse streamée du moteur (§7.5), côté client ou via un
+  moteur externe (DataFusion/Spark) sur les résultats bruts exportés.
 - Grammaire formelle complète, gestion des alias, clauses `ORDER BY` /
   `LIMIT` / pagination des résultats : **TBD**, à détailler dans une
   spec de langage dédiée avant implémentation du parser.
@@ -330,7 +344,8 @@ schema graph_v1 {
   2. Expansion topologique **hop par hop** via l'**index d'adjacence**
      (§5.1), en appliquant les filtres (`WHERE`) au plus tôt (pushdown) pour
      limiter la taille des frontières intermédiaires.
-  3. Agrégation finale et projection (`RETURN`).
+  3. Fusion des résultats distribués (déduplication, pas de réduction/
+     agrégat — cf. §7.1) et projection (`RETURN`).
 - Optimisations envisageables (ordre d'évaluation des filtres, choix de
   l'index de départ le plus sélectif, déduplication de frontière) : **TBD**,
   à approfondir une fois un premier plan d'exécution naïf validé.
