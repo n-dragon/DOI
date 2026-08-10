@@ -35,6 +35,7 @@ latence.
 | Rafraîchissement d'index | Reconstruction complète périodique (pas d'incrémental) |
 | Échelle | Cluster distribué, graphe partitionné |
 | Partitionnement | Hash-partitioning par `node_id`, sur-partitionnement fixe (§6.2) |
+| Réplication / haute disponibilité | Répliques indépendantes sans consensus (pas de Raft), voir §6.4 |
 | Exécution distribuée multi-partitions | Scatter-gather piloté par le coordinateur (voir §7.4) |
 | Schéma | Déclaratif, versionné, IDL dédiée, migrations |
 | Observabilité | Métriques (Prometheus) + tracing distribué (OpenTelemetry) |
@@ -316,9 +317,7 @@ schema graph_v1 {
   (cohérent avec la stratégie de rebuild périodique déjà retenue, §5.3) —
   pas de rebuild global du graphe. Modèle inspiré de Nebula Graph /
   consistent hashing (Cassandra).
-- Réplication des partitions pour la haute disponibilité : **TBD** (non
-  cadré) — à trancher avant mise en production (facteur de réplication,
-  stratégie de failover).
+- Réplication des partitions pour la haute disponibilité : voir §6.4.
 
 ### 6.3 Membership et découverte
 
@@ -326,6 +325,43 @@ schema graph_v1 {
   **intégration native Kubernetes** (API des Pods/Endpoints, ou headless
   Service) — décision alignée sur le choix de cible de déploiement (§10).
   Pas de registre externe (etcd/Consul) dédié en v1.
+
+### 6.4 Réplication et haute disponibilité
+
+**Décision actée : répliques indépendantes sans protocole de consensus.**
+
+À la différence des bases de graphe qui acceptent des écritures (Neo4j,
+Dgraph, Nebula Graph, TigerGraph — toutes s'appuient sur **Raft**, un
+protocole de consensus, pour mettre d'accord plusieurs répliques sur
+l'ordre des écritures), notre moteur n'a pas de write path (§4.3) : la
+donnée durable vit dans Iceberg, déjà répliquée par l'object storage
+sous-jacent. L'index en mémoire d'une partition est **entièrement dérivé
+et rebuildable** à partir d'un snapshot Iceberg figé (§5.3).
+
+Conséquence : pas besoin de consensus entre répliques.
+
+- Chaque partition logique a **N répliques** (facteur configurable, ex: 3),
+  hébergées sur des machines distinctes.
+- Chaque réplique **reconstruit indépendamment** le même index à partir du
+  même snapshot Iceberg épinglé (§5.3) — aucune coordination ni échange de
+  données entre répliques n'est nécessaire pour qu'elles convergent vers
+  un état identique.
+- Le coordinateur route chaque requête vers **n'importe quelle réplique
+  saine** de la partition concernée (round-robin ou least-loaded) —
+  toutes les répliques étant équivalentes, il n'y a pas de notion de
+  leader/follower à gérer côté lecture.
+- **Failover** : en cas de panne d'une réplique, le coordinateur cesse de
+  lui router du trafic (détecté via `HealthCheck`, §8.2) ; une nouvelle
+  réplique est provisionnée et reconstruit son index en tâche de fond,
+  selon le même mécanisme que le rebalancement (§6.2) — pas d'interruption
+  de service tant qu'au moins une réplique saine reste disponible par
+  partition.
+
+Ce modèle est nettement plus simple à opérer que Raft-par-partition — il
+n'est possible que parce que l'architecture est lecture seule avec un état
+entièrement dérivable d'une source durable externe, plutôt qu'un
+compromis de facilité : c'est une conséquence directe des décisions déjà
+actées (§4.3, §5.3).
 
 ---
 
@@ -541,14 +577,19 @@ Métriques minimales à exposer par composant :
 
 ## 13. Questions ouvertes (à trancher avant/pendant l'implémentation)
 
-1. **Réplication / haute disponibilité** des nœuds de partition.
-2. **Migration de schéma incompatible** : processus détaillé non spécifié
+1. **Migration de schéma incompatible** : processus détaillé non spécifié
    (§3.5).
-3. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
+2. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
    pour un knowledge graph mais explicitement repoussés hors du cadrage
    initial (indexation retenue = topologique + propriété uniquement) —
    à réévaluer en Phase 4.
 
+> **Résolu** : réplication / haute disponibilité (anciennement point 1) —
+> répliques indépendantes sans consensus (pas de Raft), chaque réplique
+> reconstruit le même index depuis le même snapshot Iceberg ; possible
+> uniquement parce que le moteur est lecture seule avec état dérivable.
+> Voir §6.4.
+>
 > **Résolu** : rebalancement du partitionnement (anciennement point 1) —
 > sur-partitionnement fixe découplé du nombre de machines ; rebalancer =
 > réaffecter des partitions logiques existantes à d'autres machines, pas
