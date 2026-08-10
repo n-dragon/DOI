@@ -94,9 +94,13 @@ latence.
 
 Le graphe est un **property graph statiquement typé** :
 
-- Chaque nœud a **exactement un label primaire** (type), défini dans le
-  schéma. *(Question ouverte §13 : autoriser des labels secondaires /
-  multi-label ?)*
+- Chaque nœud a **exactement un label unique** (type), défini dans le
+  schéma. **Décision actée (§13) : pas de multi-label.** Le besoin de
+  représenter une entité sous plusieurs facettes (ex: une `Person` qui est
+  aussi un `Author`) se modélise via une **arête dédiée** entre deux nœuds
+  distincts (ex: `(p:Person)-[:IS_A]->(a:Author)`) plutôt que par des
+  labels multiples sur un même nœud — cohérent avec le modèle de pattern
+  matching du moteur (§7.1).
 - Chaque arête a **exactement un type de relation**, dirigé, défini dans le
   schéma, avec un label de nœud source et un label de nœud cible autorisés
   (contrainte de typage des extrémités).
@@ -518,19 +522,20 @@ Métriques minimales à exposer par composant :
 1. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
    dérivé d'une clé métier par hachage stable — impacte l'idempotence des
    réingestions.
-2. **Multi-label sur les nœuds** : le modèle v1 suppose un label primaire
-   unique par nœud ; à confirmer si le besoin knowledge graph réel exige des
-   labels multiples (ex: un nœud à la fois `Person` et `Author`).
-3. **Rebalancement du partitionnement** en cas de changement du nombre de
+2. **Rebalancement du partitionnement** en cas de changement du nombre de
    partitions.
-4. **Réplication / haute disponibilité** des nœuds de partition.
-5. **Migration de schéma incompatible** : processus détaillé non spécifié
+3. **Réplication / haute disponibilité** des nœuds de partition.
+4. **Migration de schéma incompatible** : processus détaillé non spécifié
    (§3.5).
-6. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
+5. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
    pour un knowledge graph mais explicitement repoussés hors du cadrage
    initial (indexation retenue = topologique + propriété uniquement) —
    à réévaluer en Phase 4.
 
+> **Résolu** : label unique par nœud, pas de multi-label (anciennement
+> point 2) — le besoin de facettes multiples se modélise par une arête
+> dédiée entre nœuds distincts. Voir §3.1.
+>
 > **Résolu** : la cible de déploiement (anciennement point 1) est actée
 > sur Kubernetes — voir §10.
 >
