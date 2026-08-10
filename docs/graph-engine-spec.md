@@ -38,12 +38,18 @@ latence.
 | Exécution distribuée multi-partitions | Scatter-gather piloté par le coordinateur (voir §7.4) |
 | Schéma | Déclaratif, versionné, IDL dédiée, migrations |
 | Observabilité | Métriques (Prometheus) + tracing distribué (OpenTelemetry) |
-| Sécurité / AuthN-AuthZ | **TBD** — non cadré, à traiter avant mise en production |
+| Sécurité / AuthN-AuthZ | **Hors scope v1** — mis de côté délibérément (voir §1.3, §8.3) |
 | Cible de déploiement | **TBD** (candidat par défaut : Kubernetes, voir §10) |
 | Objectifs de performance | **TBD** — pas de cible chiffrée à ce stade |
 
 ### 1.3 Non-objectifs (pour ce scope)
 
+- **AuthN/AuthZ** (§8.3) — mis de côté délibérément pour ce cadrage : pas
+  d'authentification client, pas d'autorisation fine, pas d'audit log en
+  v1. Décision de scope assumée (le scope est un moteur mono-tenant en
+  environnement de confiance), pas un TBD à trancher plus tard — à
+  reconsidérer explicitement si une mise en production hors environnement
+  de confiance est envisagée un jour.
 - Écritures transactionnelles temps réel multi-nœuds/arêtes avec garanties
   ACID fortes (le modèle retenu est snapshot/eventual consistency).
 - Algorithmes analytiques globaux lourds (PageRank, détection de communautés)
@@ -411,17 +417,21 @@ ajoutée ultérieurement pour les clients non-gRPC.
 | `GetIndexStatus() -> IndexStatus` | Métadonnées sur la génération d'index active : snapshot Iceberg épinglé, timestamp de dernier rebuild, nombre de nœuds/arêtes chargés. |
 | `HealthCheck() -> Health` | Liveness/readiness du nœud (coordinateur ou partition). |
 
-### 8.3 Authentification / Autorisation — **[TBD, non cadré]**
+### 8.3 Authentification / Autorisation — **hors scope v1 (décision actée)**
 
-Aucune décision prise sur ce point lors du cadrage. À trancher avant toute
-mise en production :
+Mis de côté délibérément pour ce cadrage plutôt que traité comme un TBD à
+lever avant implémentation : le moteur v1 est conçu pour un déploiement en
+environnement de confiance (réseau interne, pas d'exposition directe à des
+clients non fiables), sans couche AuthN/AuthZ dans le serveur lui-même.
+
+Resteraient à traiter si une mise en production hors environnement de
+confiance était envisagée (non planifié à ce stade, noté pour mémoire) :
 - Authentification des clients (mTLS, tokens, autre).
 - Autorisation fine (par label de nœud/type de relation, par propriété) —
   pertinent en contexte knowledge graph d'entreprise avec données
   sensibles.
 - Audit log des requêtes/mutations — non retenu explicitement dans le
-  cadrage (seule l'observabilité métriques/tracing a été actée, §9), à
-  reconsidérer si des exigences de conformité apparaissent.
+  cadrage (seule l'observabilité métriques/tracing a été actée, §9).
 
 ---
 
@@ -493,34 +503,36 @@ opérationnelle de K8s n'est pas justifiée par l'échelle visée.
 | **Phase 0 — Fondations** | Définition finale de l'IDL de schéma, mapping schéma → tables Iceberg, parser DSL (sous-ensemble k-hop + pattern matching simple). |
 | **Phase 1 — Single-node MVP** | Serveur mono-partition : index topologique + propriété en mémoire, rebuild complet périodique, API réseau (opérations §8.2), pas de distribution. Valide le modèle de données et le DSL de bout en bout. |
 | **Phase 2 — Distribution** | Partitionnement hash, rôle coordinateur, choix et implémentation du modèle d'exécution multi-partitions (§7.4), tracing distribué. |
-| **Phase 3 — Durcissement production** | AuthN/AuthZ (§8.3), stratégie de réplication/HA (§6.2), cible de déploiement finalisée (§10), objectifs de performance chiffrés et benchmarking. |
+| **Phase 3 — Durcissement production** | Stratégie de réplication/HA (§6.2), cible de déploiement finalisée (§10), objectifs de performance chiffrés et benchmarking. AuthN/AuthZ (§8.3) explicitement hors scope de la roadmap — à réintroduire seulement si un déploiement hors environnement de confiance est un jour requis. |
 | **Phase 4 — Extensions** | Index vectoriel (embeddings) pour recherche sémantique, index full-text, algorithmes analytiques (via délégation à un moteur externe ou implémentation native), rebuild incrémental de l'index. |
 
 ---
 
 ## 13. Questions ouvertes (à trancher avant/pendant l'implémentation)
 
-1. **Sécurité** (§8.3) : AuthN/AuthZ non cadrées, à définir avant toute
-   exposition réseau hors environnement de confiance.
-2. **Cible de déploiement** (§10) : Kubernetes vs alternative plus simple.
-3. **Objectifs de performance** : aucune cible chiffrée (latence p99,
+1. **Cible de déploiement** (§10) : Kubernetes vs alternative plus simple.
+2. **Objectifs de performance** : aucune cible chiffrée (latence p99,
    throughput, taille de graphe maximale visée) — nécessaire pour
    dimensionner le cluster et guider les choix d'implémentation (Phase 3).
-4. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
+3. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
    dérivé d'une clé métier par hachage stable — impacte l'idempotence des
    réingestions.
-5. **Multi-label sur les nœuds** : le modèle v1 suppose un label primaire
+4. **Multi-label sur les nœuds** : le modèle v1 suppose un label primaire
    unique par nœud ; à confirmer si le besoin knowledge graph réel exige des
    labels multiples (ex: un nœud à la fois `Person` et `Author`).
-6. **Rebalancement du partitionnement** en cas de changement du nombre de
+5. **Rebalancement du partitionnement** en cas de changement du nombre de
    partitions.
-7. **Réplication / haute disponibilité** des nœuds de partition.
-8. **Migration de schéma incompatible** : processus détaillé non spécifié
+6. **Réplication / haute disponibilité** des nœuds de partition.
+7. **Migration de schéma incompatible** : processus détaillé non spécifié
    (§3.5).
-9. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
+8. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
    pour un knowledge graph mais explicitement repoussés hors du cadrage
    initial (indexation retenue = topologique + propriété uniquement) —
    à réévaluer en Phase 4.
+
+> **Mis de côté (décision de scope, pas un TBD)** : la sécurité
+> (AuthN/AuthZ, anciennement point 1 ci-dessus) est explicitement hors
+> scope v1 — voir §1.3, §8.3.
 
 > **Résolu** : l'exécution distribuée multi-partitions (anciennement point
 > 1 ci-dessus) est actée en scatter-gather piloté par le coordinateur —
