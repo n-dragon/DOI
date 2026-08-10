@@ -35,7 +35,7 @@ latence.
 | Rafraîchissement d'index | Reconstruction complète périodique (pas d'incrémental) |
 | Échelle | Cluster distribué, graphe partitionné |
 | Partitionnement | Hash-partitioning par `node_id` |
-| Exécution distribuée multi-partitions | **TBD** (candidat par défaut : scatter-gather, voir §7.4) |
+| Exécution distribuée multi-partitions | Scatter-gather piloté par le coordinateur (voir §7.4) |
 | Schéma | Déclaratif, versionné, IDL dédiée, migrations |
 | Observabilité | Métriques (Prometheus) + tracing distribué (OpenTelemetry) |
 | Sécurité / AuthN-AuthZ | **TBD** — non cadré, à traiter avant mise en production |
@@ -350,26 +350,37 @@ schema graph_v1 {
   l'index de départ le plus sélectif, déduplication de frontière) : **TBD**,
   à approfondir une fois un premier plan d'exécution naïf validé.
 
-### 7.4 Exécution distribuée multi-partitions — **[TBD, point ouvert critique]**
+### 7.4 Exécution distribuée multi-partitions
 
-Deux modèles candidats ont été identifiés sans qu'un choix soit encore
-arrêté :
+**Décision actée : scatter-gather piloté par le coordinateur.**
 
-- **Scatter-gather par coordinateur (candidat par défaut)** : à chaque hop,
-  le coordinateur envoie les frontières courantes aux partitions
-  concernées, attend les réponses, ré-agrège et ré-envoie pour le hop
-  suivant. Simple à raisonner et à observer, mais le coordinateur devient un
-  point de passage obligé et une source de latence à chaque hop
-  (round-trip par hop).
-- **Message-passing pair-à-pair (style Pregel)** : chaque nœud de partition
-  relaie directement les références distantes vers la partition cible dès
-  qu'un hop en sort, sans repasser par un coordinateur central. Plus
-  efficace en théorie pour des traversals profondes, mais plus complexe
-  (terminaison distribuée, agrégation finale, debugging).
+À chaque hop, le coordinateur envoie les frontières courantes aux
+partitions concernées, attend les réponses, ré-agrège (déduplication, cf.
+§7.3) et ré-envoie pour le hop suivant. Le coordinateur reste donc le point
+de passage obligé de toute traversée multi-partitions, avec un round-trip
+réseau par hop.
 
-**Décision à prendre avant l'implémentation du moteur d'exécution** — impacte
-directement l'architecture réseau interne du cluster (§6) et les métriques
-de tracing à instrumenter (§9).
+Raisons du choix :
+
+- Simple à raisonner, à observer et à débugger (un seul point où logguer/
+  tracer l'état de la frontière à chaque hop) — cohérent avec le tracing
+  distribué visé (§9.2).
+- Suffisant pour les profondeurs de traversal ciblées en v1 (k-hop borné,
+  `*1..3` dans l'exemple §7.1) : le surcoût d'un round-trip par hop reste
+  négligeable devant la complexité d'implémentation d'un modèle pair-à-pair.
+- Le modèle **message-passing pair-à-pair (style Pregel)**, où chaque nœud
+  de partition relaierait directement les hops sortants vers la partition
+  cible sans repasser par le coordinateur, reste une évolution possible si
+  des traversées plus profondes ou un débit plus élevé l'exigent — mais il
+  introduit une complexité significative (terminaison distribuée,
+  agrégation finale, observabilité) non justifiée pour le scope v1. Non
+  retenu, documenté ici comme option de Phase 2+ si le besoin apparaît.
+
+Impact : cette décision fixe l'architecture réseau interne du cluster
+(§6.1 — le coordinateur est un composant à part entière du chemin de
+requête, pas seulement un point d'entrée) et le modèle d'instrumentation du
+tracing distribué (§9.2 — une trace = une séquence d'appels coordinateur →
+partitions, hop par hop).
 
 ### 7.5 Streaming des résultats
 
@@ -489,27 +500,28 @@ opérationnelle de K8s n'est pas justifiée par l'échelle visée.
 
 ## 13. Questions ouvertes (à trancher avant/pendant l'implémentation)
 
-1. **Exécution distribuée multi-partitions** (§7.4) : scatter-gather vs
-   message-passing pair-à-pair — décision structurante, bloquante pour la
-   Phase 2.
-2. **Sécurité** (§8.3) : AuthN/AuthZ non cadrées, à définir avant toute
+1. **Sécurité** (§8.3) : AuthN/AuthZ non cadrées, à définir avant toute
    exposition réseau hors environnement de confiance.
-3. **Cible de déploiement** (§10) : Kubernetes vs alternative plus simple.
-4. **Objectifs de performance** : aucune cible chiffrée (latence p99,
+2. **Cible de déploiement** (§10) : Kubernetes vs alternative plus simple.
+3. **Objectifs de performance** : aucune cible chiffrée (latence p99,
    throughput, taille de graphe maximale visée) — nécessaire pour
    dimensionner le cluster et guider les choix d'implémentation (Phase 3).
-5. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
+4. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
    dérivé d'une clé métier par hachage stable — impacte l'idempotence des
    réingestions.
-6. **Multi-label sur les nœuds** : le modèle v1 suppose un label primaire
+5. **Multi-label sur les nœuds** : le modèle v1 suppose un label primaire
    unique par nœud ; à confirmer si le besoin knowledge graph réel exige des
    labels multiples (ex: un nœud à la fois `Person` et `Author`).
-7. **Rebalancement du partitionnement** en cas de changement du nombre de
+6. **Rebalancement du partitionnement** en cas de changement du nombre de
    partitions.
-8. **Réplication / haute disponibilité** des nœuds de partition.
-9. **Migration de schéma incompatible** : processus détaillé non spécifié
+7. **Réplication / haute disponibilité** des nœuds de partition.
+8. **Migration de schéma incompatible** : processus détaillé non spécifié
    (§3.5).
-10. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
-    pour un knowledge graph mais explicitement repoussés hors du cadrage
-    initial (indexation retenue = topologique + propriété uniquement) —
-    à réévaluer en Phase 4.
+9. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
+   pour un knowledge graph mais explicitement repoussés hors du cadrage
+   initial (indexation retenue = topologique + propriété uniquement) —
+   à réévaluer en Phase 4.
+
+> **Résolu** : l'exécution distribuée multi-partitions (anciennement point
+> 1 ci-dessus) est actée en scatter-gather piloté par le coordinateur —
+> voir §7.4.
