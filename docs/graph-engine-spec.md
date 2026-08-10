@@ -35,7 +35,7 @@ latence.
 | Rafraîchissement d'index | Reconstruction complète périodique (pas d'incrémental) |
 | Échelle | Cluster distribué, graphe partitionné |
 | Partitionnement | Hash-partitioning par `node_id` |
-| Exécution distribuée multi-partitions | **TBD** (candidat par défaut : scatter-gather, voir §7.4) |
+| Exécution distribuée multi-partitions | **Scatter-gather** orchestré par le coordinateur, hop par hop (voir §7.4) |
 | Schéma | Déclaratif, versionné, IDL dédiée, migrations |
 | Observabilité | Métriques (Prometheus) + tracing distribué (OpenTelemetry) |
 | Sécurité / AuthN-AuthZ | **TBD** — non cadré, à traiter avant mise en production |
@@ -350,26 +350,97 @@ schema graph_v1 {
   l'index de départ le plus sélectif, déduplication de frontière) : **TBD**,
   à approfondir une fois un premier plan d'exécution naïf validé.
 
-### 7.4 Exécution distribuée multi-partitions — **[TBD, point ouvert critique]**
+### 7.4 Exécution distribuée multi-partitions — **[Décidé : scatter-gather]**
 
-Deux modèles candidats ont été identifiés sans qu'un choix soit encore
-arrêté :
+**Décision actée :** le moteur exécute les traversals via un modèle
+**scatter-gather orchestré par le coordinateur**, hop par hop. L'alternative
+message-passing pair-à-pair (style Pregel) est écartée pour la v1 —
+simplicité de raisonnement, d'observabilité et de debugging privilégiées sur
+l'efficacité réseau théorique d'un modèle sans coordinateur.
 
-- **Scatter-gather par coordinateur (candidat par défaut)** : à chaque hop,
-  le coordinateur envoie les frontières courantes aux partitions
-  concernées, attend les réponses, ré-agrège et ré-envoie pour le hop
-  suivant. Simple à raisonner et à observer, mais le coordinateur devient un
-  point de passage obligé et une source de latence à chaque hop
-  (round-trip par hop).
-- **Message-passing pair-à-pair (style Pregel)** : chaque nœud de partition
-  relaie directement les références distantes vers la partition cible dès
-  qu'un hop en sort, sans repasser par un coordinateur central. Plus
-  efficace en théorie pour des traversals profondes, mais plus complexe
-  (terminaison distribuée, agrégation finale, debugging).
+#### 7.4.1 Déroulement d'une requête
 
-**Décision à prendre avant l'implémentation du moteur d'exécution** — impacte
-directement l'architecture réseau interne du cluster (§6) et les métriques
-de tracing à instrumenter (§9).
+1. **Résolution des nœuds de départ** : le coordinateur résout les nœuds
+   matchant le premier `MATCH (... {props})` via l'**index de propriété**
+   (§5.2), en interrogeant les partitions concernées. Résultat : un ensemble
+   `frontier_0` de `(partition_id, node_id)`.
+2. **Boucle de hops** (répétée jusqu'à profondeur max de la requête, ex.
+   `*1..3`, ou frontière vide) : pour `frontier_i`,
+   - le coordinateur **groupe** les nœuds de la frontière par
+     `partition_id` (routage direct via `hash(node_id)`, pas de lookup),
+   - envoie **un seul appel batché** par partition concernée (`ExpandHop`,
+     §7.4.2) contenant tous les `node_id` locaux à explorer + le filtre de
+     type d'arête/direction + le prédicat `WHERE` à pousser,
+   - chaque partition exécute l'expansion **localement** via son index
+     topologique (§5.1), applique le pushdown de filtre, et renvoie les
+     voisins matchés (avec leurs propriétés nécessaires à `WHERE`/`RETURN`),
+   - le coordinateur **fusionne** les réponses de toutes les partitions en
+     `frontier_{i+1}`.
+3. **Terminaison** : à la profondeur max atteinte (ou frontière vide avant),
+   le coordinateur déclenche la **projection finale** (`RETURN`) sur les
+   nœuds/arêtes retenus et **streame** les résultats au client (§7.5).
+
+Pour le **pattern matching** (plusieurs `MATCH` combinés), chaque "jambe" du
+motif est exécutée comme une traversal scatter-gather indépendante, puis les
+résultats sont **joints côté coordinateur** sur les variables partagées
+(ex: `o` dans l'exemple §7.1). *Le détail de la stratégie de join (hash-join
+en mémoire côté coordinateur vs join distribué) reste à approfondir — non
+bloquant pour un premier plan d'exécution naïf, cf. §7.3.*
+
+#### 7.4.2 Protocole réseau
+
+- Un appel `ExpandHop(partition_id, node_ids: [...], edge_filter, where_pushdown) -> [(node, matched_edges)]`
+  par partition et par hop, exécuté **en parallèle** (fan-out asynchrone
+  depuis le coordinateur) plutôt qu'un appel par nœud — l'unité de
+  granularité réseau est **le hop × la partition**, pas le nœud.
+- Porté par le protocole choisi en §8.1 (candidat gRPC/`tonic`, requête
+  unaire par hop suffisante — le streaming §7.5 s'applique à la réponse
+  finale, pas aux hops intermédiaires).
+
+#### 7.4.3 Déduplication et cycles
+
+- Le coordinateur maintient un **visited-set** `(node_id)` par requête (côté
+  coordinateur, en mémoire, portée = durée de vie de la requête) pour :
+  - éviter de ré-explorer un nœud déjà visité à un hop précédent dans une
+    même requête (obligatoire — le graphe n'est pas garanti acyclique),
+  - dédupliquer la frontière avant de la router vers les partitions (un même
+    nœud atteint via plusieurs chemins n'est envoyé qu'une fois par hop).
+- Taille du visited-set non bornée en théorie sur un graphe très connecté à
+  grande profondeur — **TBD** : nécessite une limite/quota mémoire par
+  requête (cf. §7.4.5).
+
+#### 7.4.4 Tolérance aux pannes
+
+- Si une partition ne répond pas (timeout) ou échoue pendant un `ExpandHop` :
+  **TBD** — deux politiques possibles à trancher :
+  - échec de la requête entière (fail-fast, résultat cohérent mais
+    disponibilité moindre),
+  - résultat **partiel** avec avertissement au client (disponibilité, mais
+    résultats potentiellement incomplets sans que ce soit vérifiable côté
+    client).
+- Nombre de retries, backoff, timeout par hop : **TBD**.
+- Lié à §6.2 (réplication) : sans réplication des partitions, toute panne
+  d'un nœud de partition est nécessairement bloquante pour les requêtes
+  touchant sa portion du graphe.
+
+#### 7.4.5 Limites et backpressure
+
+- **TBD** : une frontière peut croître exponentiellement avec la profondeur
+  (`*1..3` sur un nœud à fort degré). Nécessaire de définir :
+  - une taille max de frontière par hop (au-delà, requête rejetée ou
+    tronquée avec avertissement),
+  - un budget mémoire par requête au niveau du coordinateur,
+  - potentiellement un `LIMIT` appliqué **pendant** l'expansion plutôt
+    qu'après (cohérent avec le pushdown déjà retenu en §7.3), une fois la
+    clause `LIMIT` elle-même spécifiée (actuellement TBD, §7.1).
+
+#### 7.4.6 Conséquences sur l'observabilité (§9)
+
+Cette décision rend concrètes les métriques déjà prévues en §9.1 :
+nombre de hops, taux de références distantes (cross-partition) — chaque hop
+scatter-gather correspond exactement à un round-trip coordinateur ↔
+partitions concernées, directement mesurable et traçable (span par hop dans
+la trace OpenTelemetry, §9.2).
 
 ### 7.5 Streaming des résultats
 
@@ -489,27 +560,39 @@ opérationnelle de K8s n'est pas justifiée par l'échelle visée.
 
 ## 13. Questions ouvertes (à trancher avant/pendant l'implémentation)
 
-1. **Exécution distribuée multi-partitions** (§7.4) : scatter-gather vs
-   message-passing pair-à-pair — décision structurante, bloquante pour la
-   Phase 2.
-2. **Sécurité** (§8.3) : AuthN/AuthZ non cadrées, à définir avant toute
+1. **Sécurité** (§8.3) : AuthN/AuthZ non cadrées, à définir avant toute
    exposition réseau hors environnement de confiance.
-3. **Cible de déploiement** (§10) : Kubernetes vs alternative plus simple.
-4. **Objectifs de performance** : aucune cible chiffrée (latence p99,
+2. **Cible de déploiement** (§10) : Kubernetes vs alternative plus simple.
+3. **Objectifs de performance** : aucune cible chiffrée (latence p99,
    throughput, taille de graphe maximale visée) — nécessaire pour
    dimensionner le cluster et guider les choix d'implémentation (Phase 3).
-5. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
+4. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
    dérivé d'une clé métier par hachage stable — impacte l'idempotence des
    réingestions.
-6. **Multi-label sur les nœuds** : le modèle v1 suppose un label primaire
+5. **Multi-label sur les nœuds** : le modèle v1 suppose un label primaire
    unique par nœud ; à confirmer si le besoin knowledge graph réel exige des
    labels multiples (ex: un nœud à la fois `Person` et `Author`).
-7. **Rebalancement du partitionnement** en cas de changement du nombre de
+6. **Rebalancement du partitionnement** en cas de changement du nombre de
    partitions.
-8. **Réplication / haute disponibilité** des nœuds de partition.
-9. **Migration de schéma incompatible** : processus détaillé non spécifié
+7. **Réplication / haute disponibilité** des nœuds de partition.
+8. **Migration de schéma incompatible** : processus détaillé non spécifié
    (§3.5).
-10. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
-    pour un knowledge graph mais explicitement repoussés hors du cadrage
-    initial (indexation retenue = topologique + propriété uniquement) —
-    à réévaluer en Phase 4.
+9. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
+   pour un knowledge graph mais explicitement repoussés hors du cadrage
+   initial (indexation retenue = topologique + propriété uniquement) —
+   à réévaluer en Phase 4.
+10. **Protocole de transport de l'API** (§8.1) : gRPC proposé par défaut,
+    non confirmé.
+11. **Partition spec Iceberg** (§4.1) : alignement du partitionnement
+    physique des tables avec le partitionnement logique du cluster, non
+    tranché.
+12. **Stratégie de join pour le pattern matching multi-jambes** (§7.4.1) :
+    hash-join en mémoire côté coordinateur vs join distribué — non bloquant
+    pour un premier plan d'exécution naïf, mais à approfondir.
+13. **Politique de tolérance aux pannes du scatter-gather** (§7.4.4) :
+    fail-fast vs résultats partiels en cas de timeout/échec d'une partition
+    pendant un hop ; nombre de retries et backoff.
+14. **Limites/backpressure de frontière** (§7.4.5) : taille max de
+    frontière par hop, budget mémoire par requête côté coordinateur, et
+    lien avec une clause `LIMIT` du DSL (elle-même non encore spécifiée,
+    §7.1).
