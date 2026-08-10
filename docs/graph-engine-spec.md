@@ -39,8 +39,8 @@ latence.
 | Schéma | Déclaratif, versionné, IDL dédiée, migrations |
 | Observabilité | Métriques (Prometheus) + tracing distribué (OpenTelemetry) |
 | Sécurité / AuthN-AuthZ | **Hors scope v1** — mis de côté délibérément (voir §1.3, §8.3) |
-| Cible de déploiement | **TBD** (candidat par défaut : Kubernetes, voir §10) |
-| Objectifs de performance | **TBD** — pas de cible chiffrée à ce stade |
+| Cible de déploiement | Kubernetes (voir §10) |
+| Objectifs de performance | Pas de cible chiffrée pour l'instant — décision différée (voir §13) |
 
 ### 1.3 Non-objectifs (pour ce scope)
 
@@ -297,9 +297,9 @@ schema graph_v1 {
 ### 6.3 Membership et découverte
 
 - Mécanisme de découverte des nœuds de partition par le(s) coordinateur(s) :
-  **TBD**. Candidats : registre externe (etcd/Consul), ou intégration native
-  Kubernetes (API des Pods/Endpoints) si la cible de déploiement K8s est
-  confirmée (§10).
+  **intégration native Kubernetes** (API des Pods/Endpoints, ou headless
+  Service) — décision alignée sur le choix de cible de déploiement (§10).
+  Pas de registre externe (etcd/Consul) dédié en v1.
 
 ---
 
@@ -468,16 +468,21 @@ Métriques minimales à exposer par composant :
 
 ---
 
-## 10. Déploiement — **[TBD]**
+## 10. Déploiement
 
-Non tranché lors du cadrage. Candidat par défaut proposé : **Kubernetes**
-(StatefulSet pour les nœuds de partition — identité stable requise pour le
-mapping partition ↔ pod ; Deployment pour les coordinateurs si séparés du
-rôle partition, cf. §6.1), avec autoscaling horizontal pertinent côté
-coordinateurs uniquement (les partitions étant stateful et liées au
-partitionnement hash, un changement de réplicas implique un rebalancement,
-§6.2). Alternative plus simple (VMs/systemd) reste ouverte si la complexité
-opérationnelle de K8s n'est pas justifiée par l'échelle visée.
+**Décision actée : Kubernetes.**
+
+- **StatefulSet** pour les nœuds de partition — identité stable requise pour
+  le mapping partition ↔ pod (§6.2).
+- **Deployment** pour les coordinateurs si le rôle est séparé du rôle
+  partition (§6.1), avec autoscaling horizontal pertinent côté
+  coordinateurs uniquement — les partitions étant stateful et liées au
+  partitionnement hash, un changement de réplicas y implique un
+  rebalancement (§6.2), pas un simple scale-out.
+- Découverte des nœuds de partition (§6.3) : intégration native
+  Kubernetes (API des Pods/Endpoints ou headless Service), cohérente avec
+  ce choix de cible — plus besoin d'un registre externe (etcd/Consul)
+  dédié pour ce seul usage.
 
 ---
 
@@ -510,29 +515,33 @@ opérationnelle de K8s n'est pas justifiée par l'échelle visée.
 
 ## 13. Questions ouvertes (à trancher avant/pendant l'implémentation)
 
-1. **Cible de déploiement** (§10) : Kubernetes vs alternative plus simple.
-2. **Objectifs de performance** : aucune cible chiffrée (latence p99,
-   throughput, taille de graphe maximale visée) — nécessaire pour
-   dimensionner le cluster et guider les choix d'implémentation (Phase 3).
-3. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
+1. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
    dérivé d'une clé métier par hachage stable — impacte l'idempotence des
    réingestions.
-4. **Multi-label sur les nœuds** : le modèle v1 suppose un label primaire
+2. **Multi-label sur les nœuds** : le modèle v1 suppose un label primaire
    unique par nœud ; à confirmer si le besoin knowledge graph réel exige des
    labels multiples (ex: un nœud à la fois `Person` et `Author`).
-5. **Rebalancement du partitionnement** en cas de changement du nombre de
+3. **Rebalancement du partitionnement** en cas de changement du nombre de
    partitions.
-6. **Réplication / haute disponibilité** des nœuds de partition.
-7. **Migration de schéma incompatible** : processus détaillé non spécifié
+4. **Réplication / haute disponibilité** des nœuds de partition.
+5. **Migration de schéma incompatible** : processus détaillé non spécifié
    (§3.5).
-8. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
+6. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
    pour un knowledge graph mais explicitement repoussés hors du cadrage
    initial (indexation retenue = topologique + propriété uniquement) —
    à réévaluer en Phase 4.
 
+> **Résolu** : la cible de déploiement (anciennement point 1) est actée
+> sur Kubernetes — voir §10.
+>
+> **Différé explicitement (pas un TBD bloquant)** : les objectifs de
+> performance chiffrés (latence p99, throughput, taille de graphe
+> maximale) ne sont volontairement pas fixés à ce stade du cadrage — ils
+> seront définis en Phase 3, une fois un premier MVP mesurable disponible
+> (benchmarking sur données réelles plutôt que cibles théoriques a priori).
+>
 > **Mis de côté (décision de scope, pas un TBD)** : la sécurité
-> (AuthN/AuthZ, anciennement point 1 ci-dessus) est explicitement hors
-> scope v1 — voir §1.3, §8.3.
+> (AuthN/AuthZ) est explicitement hors scope v1 — voir §1.3, §8.3.
 
 > **Résolu** : l'exécution distribuée multi-partitions (anciennement point
 > 1 ci-dessus) est actée en scatter-gather piloté par le coordinateur —
