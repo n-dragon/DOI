@@ -64,4 +64,107 @@ mod tests {
 
         assert!(SchemaGrammar::parse(Rule::schema_file, source).is_err());
     }
+
+    /// A node with only the mandatory `id` field and no other properties
+    /// is legal — `property_decl*` allows zero.
+    #[test]
+    fn accepts_a_minimal_node_with_no_properties() {
+        let source = r#"
+            schema graph_v1 {
+              node Person {
+                id: NodeId
+              }
+            }
+        "#;
+
+        SchemaGrammar::parse(Rule::schema_file, source)
+            .expect("a node with just an id field should parse");
+    }
+
+    /// Covers the two composite scalar types from §3.2 that the spec
+    /// example doesn't exercise: `List<T>` and `Vector<Float32, N>`
+    /// (reserved for future embeddings use, still part of the grammar).
+    #[test]
+    fn accepts_list_and_vector_properties() {
+        let source = r#"
+            schema graph_v1 {
+              node Document {
+                id: NodeId
+                tags: List<String>
+                embedding: Vector<Float32, 768>
+              }
+            }
+        "#;
+
+        SchemaGrammar::parse(Rule::schema_file, source)
+            .expect("List<T> and Vector<Float32, N> properties should parse");
+    }
+
+    /// `//` line comments (the `COMMENT` rule) must be skippable anywhere
+    /// whitespace is allowed, not just between top-level declarations.
+    #[test]
+    fn skips_comments_interleaved_with_declarations() {
+        let source = r#"
+            // top-level comment
+            schema graph_v1 {
+              node Person { // trailing comment on the same line
+                id: NodeId
+                // a property comment
+                @indexed name: String
+              }
+            }
+        "#;
+
+        SchemaGrammar::parse(Rule::schema_file, source)
+            .expect("comments should be skipped like other whitespace");
+    }
+
+    #[test]
+    fn rejects_a_node_missing_the_id_field() {
+        let source = r#"
+            schema graph_v1 {
+              node Person {
+                name: String
+              }
+            }
+        "#;
+
+        assert!(SchemaGrammar::parse(Rule::schema_file, source).is_err());
+    }
+
+    #[test]
+    fn rejects_an_edge_missing_the_to_field() {
+        let source = r#"
+            schema graph_v1 {
+              node Person { id: NodeId }
+
+              edge KNOWS {
+                from: Person
+              }
+            }
+        "#;
+
+        assert!(SchemaGrammar::parse(Rule::schema_file, source).is_err());
+    }
+
+    #[test]
+    fn rejects_a_scalar_type_not_in_the_grammar() {
+        let source = r#"
+            schema graph_v1 {
+              node Person {
+                id: NodeId
+                age: Int32
+              }
+            }
+        "#;
+
+        assert!(SchemaGrammar::parse(Rule::schema_file, source).is_err());
+    }
+
+    #[test]
+    fn rejects_an_empty_schema_body_without_a_closing_brace() {
+        let source = "schema graph_v1 {";
+
+        assert!(SchemaGrammar::parse(Rule::schema_file, source).is_err());
+    }
 }
