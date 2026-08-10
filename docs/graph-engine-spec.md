@@ -125,9 +125,19 @@ Le graphe est un **property graph statiquement typé** :
 
 ### 3.3 Identité des nœuds et arêtes
 
-- `node_id` : identifiant unique global, `UInt64` généré par le pipeline
-  d'ingestion (ou dérivé d'une clé métier via hachage stable — **TBD**, voir
-  §13). Sert de clé de partitionnement (hash-partitioning).
+- `node_id` : identifiant unique global, `UInt64`. **Décision actée (§13) :
+  double mode.**
+  - Si la donnée source porte une clé métier stable, le pipeline
+    d'ingestion **fournit explicitement** `node_id` (dérivé par hachage
+    stable de cette clé) — garantit l'**idempotence** : une réingestion de
+    la même entité retombe sur le même `node_id` et met à jour le nœud
+    existant au lieu d'en créer un doublon.
+  - Sinon (pas de clé métier stable disponible en source), `node_id` est
+    **généré** par le pipeline (compteur ou UUID) — pas de garantie
+    d'idempotence dans ce cas : une réingestion sans corrélation explicite
+    avec la source peut créer un nouveau nœud plutôt que mettre à jour
+    l'existant.
+  - Sert de clé de partitionnement (hash-partitioning) dans les deux cas.
 - `edge_id` : identifiant unique global `UInt64`, indépendant de
   `(src, dst, type)` pour permettre des arêtes multiples entre les deux mêmes
   nœuds (multigraphe).
@@ -519,19 +529,20 @@ Métriques minimales à exposer par composant :
 
 ## 13. Questions ouvertes (à trancher avant/pendant l'implémentation)
 
-1. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
-   dérivé d'une clé métier par hachage stable — impacte l'idempotence des
-   réingestions.
-2. **Rebalancement du partitionnement** en cas de changement du nombre de
+1. **Rebalancement du partitionnement** en cas de changement du nombre de
    partitions.
-3. **Réplication / haute disponibilité** des nœuds de partition.
-4. **Migration de schéma incompatible** : processus détaillé non spécifié
+2. **Réplication / haute disponibilité** des nœuds de partition.
+3. **Migration de schéma incompatible** : processus détaillé non spécifié
    (§3.5).
-5. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
+4. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
    pour un knowledge graph mais explicitement repoussés hors du cadrage
    initial (indexation retenue = topologique + propriété uniquement) —
    à réévaluer en Phase 4.
 
+> **Résolu** : génération de `node_id` en double mode (anciennement
+> point 1) — fourni explicitement (hachage d'une clé métier stable) si la
+> source en a une, sinon généré par le pipeline. Voir §3.3.
+>
 > **Résolu** : label unique par nœud, pas de multi-label (anciennement
 > point 2) — le besoin de facettes multiples se modélise par une arête
 > dédiée entre nœuds distincts. Voir §3.1.
