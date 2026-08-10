@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/graph-schema",
+    "crates/graph-storage",
+    "crates/graph-index",
+    "crates/graph-dsl",
+    "crates/graph-query",
+    "crates/graph-proto",
+    "crates/graph-cluster",
+    "crates/graph-observability",
+    "bin/graph-coordinator",
+    "bin/graph-partition-node",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+
+[workspace.dependencies]
+graph-schema = { path = "crates/graph-schema" }
+graph-storage = { path = "crates/graph-storage" }
+graph-index = { path = "crates/graph-index" }
+graph-dsl = { path = "crates/graph-dsl" }
+graph-query = { path = "crates/graph-query" }
+graph-proto = { path = "crates/graph-proto" }
+graph-cluster = { path = "crates/graph-cluster" }
+graph-observability = { path = "crates/graph-observability" }
+
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+tonic = "0.11"
+prost = "0.12"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+arc-swap = "1"
+tracing = "0.1"

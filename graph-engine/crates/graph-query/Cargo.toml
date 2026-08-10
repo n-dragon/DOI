@@ -1,0 +1,11 @@
+[package]
+name = "graph-query"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+graph-schema.workspace = true
+graph-dsl.workspace = true
+graph-index.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,8 @@
+[package]
+name = "graph-dsl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+graph-schema.workspace = true
+thiserror.workspace = true

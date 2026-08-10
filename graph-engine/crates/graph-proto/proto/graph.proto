@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package graph.v1;
+
+// Client-facing API (spec §8.2). Transport: gRPC (§8.1 — chosen for native
+// streaming and Protobuf typing consistent with the statically-typed
+// model). No AuthN/AuthZ in this surface — deliberately out of v1 scope
+// (spec §8.3).
+service GraphService {
+  // Executes a DSL query (spec §7.1) and streams results back as they are
+  // produced by the coordinator's scatter-gather loop (§7.5) — never
+  // materialized in full before the first result is sent.
+  rpc ExecuteQuery(ExecuteQueryRequest) returns (stream QueryResult);
+
+  // Returns the schema version currently active (§3.5).
+  rpc GetSchema(GetSchemaRequest) returns (SchemaResponse);
+
+  // Metadata about the index generation currently served: pinned
+  // snapshot, last rebuild time, node/edge counts (§5.3, §9.1 staleness
+  // metric).
+  rpc GetIndexStatus(GetIndexStatusRequest) returns (IndexStatusResponse);
+
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// Internal, coordinator -> partition-replica surface driving one hop of a
+// scatter-gather round (spec §7.4). Not exposed to end clients.
+service PartitionService {
+  rpc ResolveStart(ResolveStartRequest) returns (stream Binding);
+  rpc ExpandHop(ExpandHopRequest) returns (stream Binding);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message ExecuteQueryRequest {
+  string dsl = 1;
+}
+
+message QueryResult {
+  map<string, Value> projection = 1;
+}
+
+message Value {
+  oneof kind {
+    int64 int64_value = 1;
+    double float64_value = 2;
+    bool bool_value = 3;
+    string string_value = 4;
+    int64 timestamp_value = 5;
+    bytes bytes_value = 6;
+  }
+}
+
+message GetSchemaRequest {}
+
+message SchemaResponse {
+  string schema_idl = 1;
+  string version = 2;
+}
+
+message GetIndexStatusRequest {}
+
+message IndexStatusResponse {
+  int64 pinned_snapshot_id = 1;
+  int64 last_rebuilt_unix_ms = 2;
+  uint64 node_count = 3;
+  uint64 edge_count = 4;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  enum Status {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+  }
+  Status status = 1;
+}
+
+message ResolveStartRequest {
+  string label_or_type = 1;
+  string property = 2;
+  Value key = 3;
+}
+
+message ExpandHopRequest {
+  repeated Binding frontier = 1;
+  string edge_type = 2;
+  bool incoming = 3;
+}
+
+message Binding {
+  map<string, uint64> node_ids_by_alias = 1;
+}

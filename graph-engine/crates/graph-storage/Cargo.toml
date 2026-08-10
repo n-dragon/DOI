@@ -1,0 +1,9 @@
+[package]
+name = "graph-storage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+graph-schema.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
