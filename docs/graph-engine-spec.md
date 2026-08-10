@@ -29,7 +29,7 @@ latence.
 | Runtime | Serveur avec API réseau (pas de mode embarqué) |
 | Langage de requête | DSL de traversal type Cypher/Gremlin |
 | Opérations prioritaires | Voisinage k-hop filtré, pattern matching |
-| Agrégation | **Aucune dans le moteur** — délégation en aval (voir §7.1, §1.3) |
+| Agrégation | **Aucune dans le moteur** — délégation en aval (voir §7.1, §1.4) |
 | Ingestion | Batch externe (Spark/Flink → Iceberg), pas d'écriture directe via le serveur |
 | Cohérence | Éventuelle, snapshot isolation en lecture (time-travel Iceberg) |
 | Rafraîchissement d'index | Reconstruction complète périodique (pas d'incrémental) |
@@ -39,11 +39,33 @@ latence.
 | Exécution distribuée multi-partitions | Scatter-gather piloté par le coordinateur (voir §7.4) |
 | Schéma | Déclaratif, versionné, IDL dédiée, migrations |
 | Observabilité | Métriques (Prometheus) + tracing distribué (OpenTelemetry) |
-| Sécurité / AuthN-AuthZ | **Hors scope v1** — mis de côté délibérément (voir §1.3, §8.3) |
+| Sécurité / AuthN-AuthZ | **Hors scope v1** — mis de côté délibérément (voir §1.4, §8.3) |
 | Cible de déploiement | Kubernetes (voir §10) |
 | Objectifs de performance | Pas de cible chiffrée pour l'instant — décision différée (voir §13) |
 
-### 1.3 Non-objectifs (pour ce scope)
+### 1.3 Pourquoi ces choix structurants
+
+Le tableau §1.2 dit *quoi* ; les décisions les plus discutées (exécution
+distribuée, réplication, partitionnement, sécurité, déploiement...) ont
+leur justification détaillée dans leur section dédiée (renvois ci-dessous).
+Pour les choix fondateurs qui n'ont pas de section dédiée, la
+justification est résumée ici :
+
+| Dimension | Pourquoi |
+|---|---|
+| Rust | Pas de GC → latence prévisible pour un moteur qui sert un index en mémoire partagé entre threads/requêtes concurrentes ; sûreté mémoire (pas de data race) sur des structures concurrentes comme l'index CSR (§5.1) sans le coût d'un langage managé ; écosystème mature pour du réseau/systems programming (`tokio`, `tonic`). |
+| Property graph statiquement typé | Valider à l'ingestion plutôt qu'à la lecture (§3.1) suppose de connaître les types à l'avance ; permet un layout mémoire fixe par label (plus compact/rapide qu'une map dynamique par nœud) et la génération de bindings clients typés (§3.4). |
+| Apache Iceberg (stockage durable) | Schema evolution native (aligne §3.5 sans réimplémenter la logique de migration compatible) ; time-travel = snapshot isolation en lecture "gratuite" (§4.2) ; interopérable avec l'écosystème batch existant (Spark/Flink) plutôt que de réinventer un format de table ; durabilité/réplication déjà gérées par l'object storage sous-jacent — condition qui permet §6.4 (pas de Raft nécessaire). |
+| Index = topologique + propriété (rien de plus en v1) | Ce sont exactement les deux structures nécessaires aux deux opérations prioritaires actées (résolution du départ via propriété, §5.2 ; expansion via adjacence, §5.1) — pas de structure supplémentaire tant qu'un besoin ne le justifie pas (cf. index vectoriel/full-text, différés en Phase 4, §5.2). |
+| Runtime serveur réseau (pas de mode embarqué) | Un knowledge graph d'entreprise dépasse la mémoire d'un seul process client ; plusieurs clients doivent interroger le même graphe partagé sans dupliquer l'index ; découple le cycle de vie du moteur (rebuild, cluster) de celui des applications clientes. |
+| DSL type Cypher/Gremlin | Standard de facto pour le pattern matching sur property graph, syntaxe déjà connue de quiconque a pratiqué Neo4j/TinkerPop ; le `MATCH` correspond directement aux deux opérations prioritaires visées (§1.1) sans traduction conceptuelle. |
+| Ingestion batch externe (pas d'écriture directe) | Sépare le chemin de lecture à faible latence du traitement d'ingestion ; réutilise des moteurs de traitement batch/streaming déjà éprouvés (Spark/Flink) plutôt que d'en réimplémenter un dans le moteur graphe ; rend possible le modèle de cohérence simple retenu (pas d'écritures concurrentes à coordonner côté graphe). |
+| Cohérence éventuelle, snapshot isolation en lecture | Conséquence directe de la séparation lecture/écriture ci-dessus : fournie nativement par Iceberg (§4.2), suffisante pour un usage d'exploration/analyse où une staleness bornée est acceptable — pas besoin de transactions distribuées pour ce cas d'usage. |
+| Reconstruction complète périodique (pas d'incrémental en v1) | Plus simple à implémenter et à raisonner qu'un rebuild incrémental (pas de delta-state à réconcilier, pas de risque de référence orpheline) ; la staleness résultante est acceptable pour le cas d'usage (§5.3) — l'incrémental reste une optimisation future une fois le modèle validé (§12, Phase 4). |
+| Échelle distribuée dès la conception | Anticipe la taille réelle d'un knowledge graph d'entreprise (potentiellement au-delà de la mémoire d'une seule machine) ; partitionner dès l'architecture évite une réécriture structurelle majeure plus tard — même si le MVP (§12, Phase 1) démarre volontairement mono-partition pour valider le modèle avant de distribuer. |
+| Observabilité (Prometheus + OpenTelemetry) | Standards ouverts de l'écosystème cloud-native, cohérents avec la cible de déploiement Kubernetes (§10) ; large écosystème d'exporters/backends compatibles, pas de verrouillage propriétaire. |
+
+### 1.4 Non-objectifs (pour ce scope)
 
 - **AuthN/AuthZ** (§8.3) — mis de côté délibérément pour ce cadrage : pas
   d'authentification client, pas d'autorisation fine, pas d'audit log en
@@ -52,12 +74,15 @@ latence.
   reconsidérer explicitement si une mise en production hors environnement
   de confiance est envisagée un jour.
 - Écritures transactionnelles temps réel multi-nœuds/arêtes avec garanties
-  ACID fortes (le modèle retenu est snapshot/eventual consistency).
+  ACID fortes (le modèle retenu est snapshot/eventual consistency — pourquoi,
+  voir §1.3 "Cohérence éventuelle").
 - Algorithmes analytiques globaux lourds (PageRank, détection de communautés)
   en v1 — ils sont repoussés en phase ultérieure (§12) et pourraient être
-  délégués à un moteur externe (Spark/DataFusion) plutôt que réimplémentés.
+  délégués à un moteur externe (Spark/DataFusion) plutôt que réimplémentés :
+  même logique que pour l'index vectoriel/full-text (§5.2) — mieux traité
+  par un moteur spécialisé que réimplémenté ici.
 - Mode embarqué (librairie in-process) — hors scope, le moteur est un
-  serveur réseau dès la v1.
+  serveur réseau dès la v1 (pourquoi, voir §1.3 "Runtime serveur réseau").
 - **Agrégation** (`COUNT`, `SUM`, `AVG`, `GROUP BY`, `COLLECT`, etc.) — le
   moteur reste un pur moteur de **traversal / pattern-matching**. Toute
   agrégation sur les résultats est déléguée en aval, hors du moteur graphe
@@ -262,8 +287,14 @@ schema graph_v1 {
   `MATCH (p:Person {name: "Alice"})`) avant d'entrer dans le moteur de
   traversal topologique.
 - Index full-text et index vectoriel (embeddings) : **hors scope v1**, notés
-  comme extension future (§13) — non retenus dans le cadrage initial en
-  dehors de propriété + topologique.
+  comme extension future (§12 Phase 4, §13) — non retenus dans le cadrage
+  initial en dehors de propriété + topologique. Pourquoi : ce sont des
+  paradigmes d'indexation différents (recherche approximative par
+  similarité vs recherche exacte par égalité/range) qui répondent à un
+  besoin distinct des deux opérations prioritaires actées (k-hop filtré,
+  pattern matching, §1.1) ; mieux traités par des moteurs spécialisés
+  existants que réimplémentés dans ce moteur — même logique que pour les
+  algorithmes analytiques globaux (§1.4).
 
 ### 5.3 Stratégie de rafraîchissement
 
@@ -383,13 +414,13 @@ actées (§4.3, §5.3).
     WHERE p.name = "Alice" AND colleague <> p
     RETURN colleague, o
     ```
-- Hors scope v1 (noté explicitement, cf. §1.3 et §12) : `shortest path`,
+- Hors scope v1 (noté explicitement, cf. §1.4 et §12) : `shortest path`,
   algorithmes analytiques globaux.
 - **Pas d'agrégation** : le DSL ne comporte volontairement **aucune**
   fonction d'agrégation (`COUNT`, `SUM`, `AVG`, `MIN`/`MAX`, `COLLECT`) ni
   clause `GROUP BY`. `RETURN` ne fait que **projeter** les nœuds/arêtes/
   propriétés matchés par le `MATCH`, sans les réduire ni les regrouper —
-  décision actée (§1.3), pas un TBD. Un besoin d'agrégation se traite en
+  décision actée (§1.4), pas un TBD. Un besoin d'agrégation se traite en
   aval de la réponse streamée du moteur (§7.5), côté client ou via un
   moteur externe (DataFusion/Spark) sur les résultats bruts exportés.
 - Grammaire formelle complète, gestion des alias, clauses `ORDER BY` /
@@ -534,6 +565,18 @@ Métriques minimales à exposer par composant :
 
 **Décision actée : Kubernetes.**
 
+Pourquoi Kubernetes plutôt qu'une alternative plus simple (VMs/systemd) :
+c'est la cible standard de facto pour orchestrer des services distribués
+stateful, avec des primitives qui correspondent directement à notre
+modèle — `StatefulSet` pour l'identité stable requise par le mapping
+partition ↔ pod (§6.2), découverte native de services (§6.3) sans
+registre externe à opérer, et intégration directe avec la stack
+d'observabilité déjà retenue (Prometheus/OpenTelemetry, §9). Le coût
+opérationnel de K8s est assumé au regard de l'échelle visée (cluster
+distribué et partitionné dès la conception, §1.3) — une alternative plus
+simple resterait pertinente pour un déploiement mono-machine ou à très
+petite échelle, ce qui n'est pas le scope ici.
+
 - **StatefulSet** pour les nœuds de partition — identité stable requise pour
   le mapping partition ↔ pod (§6.2).
 - **Deployment** pour les coordinateurs si le rôle est séparé du rôle
@@ -615,7 +658,7 @@ Métriques minimales à exposer par composant :
 > (benchmarking sur données réelles plutôt que cibles théoriques a priori).
 >
 > **Mis de côté (décision de scope, pas un TBD)** : la sécurité
-> (AuthN/AuthZ) est explicitement hors scope v1 — voir §1.3, §8.3.
+> (AuthN/AuthZ) est explicitement hors scope v1 — voir §1.4, §8.3.
 
 > **Résolu** : l'exécution distribuée multi-partitions (anciennement point
 > 1 ci-dessus) est actée en scatter-gather piloté par le coordinateur —
