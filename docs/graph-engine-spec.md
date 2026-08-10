@@ -34,7 +34,7 @@ latence.
 | Cohérence | Éventuelle, snapshot isolation en lecture (time-travel Iceberg) |
 | Rafraîchissement d'index | Reconstruction complète périodique (pas d'incrémental) |
 | Échelle | Cluster distribué, graphe partitionné |
-| Partitionnement | Hash-partitioning par `node_id` |
+| Partitionnement | Hash-partitioning par `node_id`, sur-partitionnement fixe (§6.2) |
 | Exécution distribuée multi-partitions | Scatter-gather piloté par le coordinateur (voir §7.4) |
 | Schéma | Déclaratif, versionné, IDL dédiée, migrations |
 | Observabilité | Métriques (Prometheus) + tracing distribué (OpenTelemetry) |
@@ -301,9 +301,21 @@ schema graph_v1 {
 
 - **Hash-partitioning** par `node_id` : `partition_id = hash(node_id) %
   n_partitions`.
-- Rebalancement lors d'un changement de `n_partitions` : **TBD** — implique
-  a minima un rebuild complet des index sur les partitions affectées
-  (cohérent avec la stratégie de rebuild périodique déjà retenue).
+- **Décision actée : sur-partitionnement fixe, découplé du nombre de
+  machines.** `n_partitions` est un nombre **logique fixé une fois pour
+  toutes** à la création du graphe, volontairement sur-dimensionné par
+  rapport au nombre de nœuds de calcul initial (ex: 100 partitions
+  logiques pour 3 machines). Ce nombre **ne change jamais** — donc
+  `hash(node_id) % n_partitions` reste stable dans le temps, et aucun nœud
+  ne change jamais de partition logique.
+- **Rebalancement = réaffectation physique, pas rehash.** Ajouter ou
+  retirer une machine ne touche qu'à la table d'affectation "partition
+  logique → machine physique" : on déplace un sous-ensemble de partitions
+  logiques existantes d'une machine à une autre. Seules les partitions
+  déplacées ont leur index reconstruit sur leur nouvelle machine
+  (cohérent avec la stratégie de rebuild périodique déjà retenue, §5.3) —
+  pas de rebuild global du graphe. Modèle inspiré de Nebula Graph /
+  consistent hashing (Cassandra).
 - Réplication des partitions pour la haute disponibilité : **TBD** (non
   cadré) — à trancher avant mise en production (facteur de réplication,
   stratégie de failover).
@@ -529,16 +541,19 @@ Métriques minimales à exposer par composant :
 
 ## 13. Questions ouvertes (à trancher avant/pendant l'implémentation)
 
-1. **Rebalancement du partitionnement** en cas de changement du nombre de
-   partitions.
-2. **Réplication / haute disponibilité** des nœuds de partition.
-3. **Migration de schéma incompatible** : processus détaillé non spécifié
+1. **Réplication / haute disponibilité** des nœuds de partition.
+2. **Migration de schéma incompatible** : processus détaillé non spécifié
    (§3.5).
-4. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
+3. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
    pour un knowledge graph mais explicitement repoussés hors du cadrage
    initial (indexation retenue = topologique + propriété uniquement) —
    à réévaluer en Phase 4.
 
+> **Résolu** : rebalancement du partitionnement (anciennement point 1) —
+> sur-partitionnement fixe découplé du nombre de machines ; rebalancer =
+> réaffecter des partitions logiques existantes à d'autres machines, pas
+> rehasher. Voir §6.2.
+>
 > **Résolu** : génération de `node_id` en double mode (anciennement
 > point 1) — fourni explicitement (hachage d'une clé métier stable) si la
 > source en a une, sinon généré par le pipeline. Voir §3.3.
