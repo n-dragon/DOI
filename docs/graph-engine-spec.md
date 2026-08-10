@@ -578,12 +578,14 @@ Métriques minimales à exposer par composant :
 ## 13. Questions ouvertes (à trancher avant/pendant l'implémentation)
 
 1. **Migration de schéma incompatible** : processus détaillé non spécifié
-   (§3.5).
-2. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
-   pour un knowledge graph mais explicitement repoussés hors du cadrage
-   initial (indexation retenue = topologique + propriété uniquement) —
-   à réévaluer en Phase 4.
+   (§3.5) — laissé volontairement en `TBD`, à traiter au moment où le
+   besoin se présente plutôt qu'anticipé dans ce cadrage.
 
+> **Mis de côté (décision de scope, pas un TBD)** : index vectoriel
+> (embeddings) et index full-text — confirmés hors scope v1, repoussés en
+> Phase 4 si le besoin se confirme. Indexation v1 = topologique + propriété
+> uniquement (§5.2). Voir §12.
+>
 > **Résolu** : réplication / haute disponibilité (anciennement point 1) —
 > répliques indépendantes sans consensus (pas de Raft), chaque réplique
 > reconstruit le même index depuis le même snapshot Iceberg ; possible
