@@ -1,0 +1,59 @@
+// Grammar for the declarative schema IDL (spec §3.4).
+//
+// Example this grammar must accept (spec §3.4):
+//
+//   schema graph_v1 {
+//     node Person {
+//       id: NodeId
+//       name: String
+//       birth_year: Int64?
+//     }
+//     edge WORKS_AT {
+//       from: Person
+//       to: Organization
+//       since: Timestamp?
+//     }
+//   }
+
+schema_file = { SOI ~ schema_decl ~ EOI }
+
+schema_decl = { "schema" ~ ident ~ "{" ~ type_decl* ~ "}" }
+
+type_decl = _{ node_decl | edge_decl }
+
+node_decl = { "node" ~ ident ~ "{" ~ id_field ~ property_decl* ~ "}" }
+
+edge_decl = { "edge" ~ ident ~ "{" ~ from_field ~ to_field ~ property_decl* ~ "}" }
+
+id_field = { "id" ~ ":" ~ "NodeId" }
+
+from_field = { "from" ~ ":" ~ ident }
+
+to_field = { "to" ~ ":" ~ ident }
+
+// `@indexed` marks a property for the property index (spec §5.2) — kept
+// explicit and opt-in per property rather than indexing everything.
+property_decl = { indexed_marker? ~ ident ~ ":" ~ scalar_type ~ optional_marker? }
+
+indexed_marker = { "@indexed" }
+
+optional_marker = { "?" }
+
+scalar_type = { list_type | vector_type | simple_type }
+
+simple_type = { "Int64" | "Float64" | "Bool" | "String" | "Timestamp" | "Bytes" }
+
+list_type = { "List" ~ "<" ~ scalar_type ~ ">" }
+
+// Reserved for future use (embeddings) — deliberately out of scope for
+// v1 indexing (spec §5.2, §13). Still parseable so the grammar matches
+// the full scalar type surface declared in §3.2.
+vector_type = { "Vector" ~ "<" ~ "Float32" ~ "," ~ number ~ ">" }
+
+ident = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+number = @{ ASCII_DIGIT+ }
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }

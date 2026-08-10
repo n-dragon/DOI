@@ -6,6 +6,8 @@
 //! typed client bindings (§3.4) — every other crate depends on it, it
 //! depends on nothing else in this workspace.
 
+mod grammar;
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;

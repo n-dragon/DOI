@@ -36,3 +36,5 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 arc-swap = "1"
 tracing = "0.1"
+pest = "2"
+pest_derive = "2"
