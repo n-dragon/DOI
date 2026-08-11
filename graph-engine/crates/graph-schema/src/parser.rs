@@ -194,7 +194,9 @@ fn parse_scalar_type(pair: Pair<Rule>) -> ScalarType {
             "String" => ScalarType::String,
             "Timestamp" => ScalarType::Timestamp,
             "Bytes" => ScalarType::Bytes,
-            other => unreachable!("grammar's simple_type alternatives are exhaustive, got {other:?}"),
+            other => {
+                unreachable!("grammar's simple_type alternatives are exhaustive, got {other:?}")
+            }
         },
         Rule::list_type => {
             let elem = inner
@@ -213,7 +215,9 @@ fn parse_scalar_type(pair: Pair<Rule>) -> ScalarType {
                 .expect("the `number` rule only matches ASCII digits");
             ScalarType::Vector { dim }
         }
-        other => unreachable!("scalar_type only wraps simple_type/list_type/vector_type, got {other:?}"),
+        other => {
+            unreachable!("scalar_type only wraps simple_type/list_type/vector_type, got {other:?}")
+        }
     }
 }
 

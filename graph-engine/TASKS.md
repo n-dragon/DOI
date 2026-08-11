@@ -35,23 +35,27 @@ tâche n'est "faite" que si elle compile et que son test passe.
 
 ### graph-dsl
 
-- **D1** — Écrire la grammaire `pest` du DSL : `MATCH` avec motif
+### graph-dsl — ✅ terminé (Phase 0)
+
+- ✅ **D1** — Écrire la grammaire `pest` du DSL : `MATCH` avec motif
   nœud/arête, hop range (`*1..3`), `WHERE`, `RETURN` (§7.1).
-- **D2** — Implémenter `Parser::parse` pour un `NodePattern` seul (ex:
-  `(p:Person {name: "Alice"})`). *(dépend de D1)*
-- **D3** — Implémenter `Parser::parse` pour une chaîne `Pattern` complète
+- ✅ **D2** — Implémenter `Parser::parse` pour un `NodePattern` seul (ex:
+  `(p:Person {name: "Alice"})`). *(dépend de D1)* — `PestParser`.
+- ✅ **D3** — Implémenter `Parser::parse` pour une chaîne `Pattern` complète
   (nœuds + arêtes typées + hop range). *(dépend de D2)*
-- **D4** — Implémenter `Parser::parse` pour la clause `WHERE`
-  (`PropertyFilter` + `ComparisonOp`). *(dépend de D3)*
-- **D5** — Tests parser : les deux exemples du spec §7.1 (k-hop filtré,
+- ✅ **D4** — Implémenter `Parser::parse` pour la clause `WHERE`
+  (`PropertyFilter` + `ComparisonOp`). *(dépend de D3)* — inclut
+  `WhereCondition::AliasComparison` pour `colleague <> p` (§7.1), une
+  comparaison entre deux alias liés plutôt qu'une propriété.
+- ✅ **D5** — Tests parser : les deux exemples du spec §7.1 (k-hop filtré,
   pattern matching) donnent l'AST attendu. *(dépend de D4)*
-- **D6** — Tests parser : cas d'erreur de syntaxe → `DslError::Syntax`.
+- ✅ **D6** — Tests parser : cas d'erreur de syntaxe → `DslError::Syntax`.
   *(dépend de D4)*
-- **D7** — Implémenter `Validator::validate` : existence des labels/types
-  de relation contre le `Schema`. *(dépend de S2)*
-- **D8** — Implémenter `Validator::validate` : compatibilité type de
+- ✅ **D7** — Implémenter `Validator::validate` : existence des labels/types
+  de relation contre le `Schema`. *(dépend de S2)* — `SchemaValidator`.
+- ✅ **D8** — Implémenter `Validator::validate` : compatibilité type de
   propriété ↔ `ComparisonOp` utilisé dans `WHERE`. *(dépend de D7)*
-- **D9** — Tests validateur : requête valide passe, requête avec label
+- ✅ **D9** — Tests validateur : requête valide passe, requête avec label
   inconnu / opérateur incompatible échoue avec le bon `ValidationError`.
   *(dépend de D8)*
 

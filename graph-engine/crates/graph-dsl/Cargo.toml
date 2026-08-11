@@ -6,3 +6,5 @@ edition.workspace = true
 [dependencies]
 graph-schema.workspace = true
 thiserror.workspace = true
+pest.workspace = true
+pest_derive.workspace = true

@@ -113,26 +113,34 @@ distribuée (fail-fast).
 **Ce qu'elle expose.**
 - AST : `Pattern`, `PatternStep`, `NodePattern`, `EdgePattern`,
   `Direction`, `HopRange`, `PropertyFilter`, `ComparisonOp`, `Literal`,
-  `Query`.
-- `Parser` : trait à implémenter — texte DSL → `Query`.
+  `WhereCondition`, `Query`.
+- `Parser` : trait à implémenter — texte DSL → `Query`. Implémentation :
+  `PestParser`.
 - `Validator` : trait à implémenter — `Query` + `Schema` → erreurs de
-  validation, le cas échéant.
+  validation, le cas échéant. Implémentation : `SchemaValidator`.
 
 **Dépend de** : `graph-schema`. **Dépendent d'elle** : `graph-query`,
 `graph-coordinator`.
 
 **Fait.** L'AST complet pour les deux opérations prioritaires (k-hop
 filtré, pattern matching) ; volontairement **aucune** construction
-d'agrégation dans l'AST (décision actée, spec §1.4/§7.1).
+d'agrégation dans l'AST (décision actée, spec §1.4/§7.1). Grammaire
+`pest` couvrant les deux formes prioritaires (D1) et `PestParser` (D2-D4,
+avec tests sur les deux exemples du spec §7.1 et les cas d'erreur de
+syntaxe). `SchemaValidator` (D7-D9) : existence des labels/types de
+relation, compatibilité type de propriété ↔ opérateur de comparaison
+(égalité/inégalité valides pour tout scalaire hors `List`/`Vector` ;
+opérateurs d'ordre valides seulement pour `Int64`/`Float64`/`Timestamp`).
+
+L'AST distingue `WhereCondition::Property` (`alias.propriété OP
+littéral`) de `WhereCondition::AliasComparison` (`alias OP alias`, ex.
+`colleague <> p` dans l'exemple pattern-matching §7.1) — le second
+compare deux alias liés, pas une propriété, donc ne peut pas réutiliser
+`PropertyFilter`.
 
 **Reste à faire (Phase 0).**
-- Grammaire formelle complète (alias, `ORDER BY`, `LIMIT`, pagination —
-  encore `TBD` dans le spec §7.1) puis son parser. Candidat : `pest` (même
-  outillage que pour l'IDL du schéma, cohérence d'outils) ou `chumsky`
-  pour de meilleurs messages d'erreur orientés utilisateur.
-- Implémentation de `Validator` : vérifier existence des labels/types de
-  relation, compatibilité type de propriété ↔ opérateur de comparaison
-  utilisé.
+- Grammaire formelle complète (alias avancés, `ORDER BY`, `LIMIT`,
+  pagination — encore `TBD` dans le spec §7.1).
 
 ---
 

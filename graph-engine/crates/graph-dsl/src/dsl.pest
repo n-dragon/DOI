@@ -1,0 +1,76 @@
+// Grammar for the traversal/pattern-matching query DSL (spec §7.1).
+//
+// The two example queries this grammar must accept (spec §7.1):
+//
+//   MATCH (p:Person {name: "Alice"})-[:KNOWS*1..3]->(friend:Person)
+//   WHERE friend.birth_year > 1990
+//   RETURN friend
+//
+//   MATCH (p:Person)-[:WORKS_AT]->(o:Organization)<-[:WORKS_AT]-(colleague:Person)
+//   WHERE p.name = "Alice" AND colleague <> p
+//   RETURN colleague, o
+//
+// The full grammar (aliasing rules beyond this, `ORDER BY`/`LIMIT`/
+// pagination) is explicitly `TBD` in the spec (§7.1) — this covers only
+// the two prioritized query shapes above.
+
+query = { SOI ~ "MATCH" ~ pattern ~ where_clause? ~ return_clause ~ EOI }
+
+pattern = { node_pattern ~ (edge_pattern ~ node_pattern)* }
+
+node_pattern = { "(" ~ ident ~ (":" ~ ident)? ~ property_map? ~ ")" }
+
+property_map = { "{" ~ (property_kv ~ ("," ~ property_kv)*)? ~ "}" }
+
+property_kv = { ident ~ ":" ~ literal }
+
+edge_pattern = { outgoing_edge | incoming_edge }
+
+outgoing_edge = { "-" ~ edge_detail? ~ "->" }
+
+incoming_edge = { "<-" ~ edge_detail? ~ "-" }
+
+edge_detail = { "[" ~ (":" ~ ident)? ~ hop_range? ~ "]" }
+
+// Variable-length traversal, e.g. `*1..3` (§7.1). Absent = a single
+// direct hop (min = max = 1), the default a plain `-->`/`<--` means.
+hop_range = { "*" ~ number ~ ".." ~ number }
+
+where_clause = { "WHERE" ~ where_condition ~ ("AND" ~ where_condition)* }
+
+// Tried in this order so a bare `alias OP alias` (no ".") correctly
+// falls through to `alias_comparison` once `property_condition`'s
+// mandatory "." fails to match.
+where_condition = { property_condition | alias_comparison }
+
+property_condition = { ident ~ "." ~ ident ~ comparison_op ~ literal }
+
+// e.g. `colleague <> p` (§7.1 pattern-matching example) — comparing two
+// bound aliases for (in)equality, not a property lookup.
+alias_comparison = { ident ~ comparison_op ~ ident }
+
+// Longer operators listed before any shorter operator they share a
+// prefix with, so e.g. `<=` isn't mis-consumed as `<` followed by `=`.
+comparison_op = { "<=" | ">=" | "<>" | "=" | "<" | ">" }
+
+return_clause = { "RETURN" ~ ident ~ ("," ~ ident)* }
+
+literal = { string_literal | float_literal | int_literal | bool_literal }
+
+string_literal = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+// Tried before `int_literal` so e.g. `1990.5` isn't mis-consumed as the
+// integer `1990` followed by a dangling `.5`.
+float_literal = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+
+int_literal = @{ "-"? ~ ASCII_DIGIT+ }
+
+bool_literal = { "true" | "false" }
+
+ident = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+number = @{ ASCII_DIGIT+ }
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }

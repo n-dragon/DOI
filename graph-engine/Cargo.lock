@@ -256,6 +256,8 @@ name = "graph-dsl"
 version = "0.1.0"
 dependencies = [
  "graph-schema",
+ "pest",
+ "pest_derive",
  "thiserror",
 ]
 

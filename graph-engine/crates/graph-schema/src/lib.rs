@@ -49,7 +49,9 @@ pub enum ScalarType {
     List(Box<ScalarType>),
     /// Dense fixed-dimension vector, reserved for future use (embeddings) —
     /// deliberately out of scope for v1 indexing (§5.2, §13).
-    Vector { dim: u32 },
+    Vector {
+        dim: u32,
+    },
 }
 
 /// A single property declaration on a node or edge type.

@@ -82,9 +82,7 @@ mod tests {
     /// *(task S7)* Identical schemas are trivially compatible.
     #[test]
     fn identical_schemas_are_compatible() {
-        let s = schema(
-            r#"schema graph_v1 { node Person { id: NodeId name: String } }"#,
-        );
+        let s = schema(r#"schema graph_v1 { node Person { id: NodeId name: String } }"#);
         assert_eq!(SpecSchemaEvolution.diff(&s, &s), EvolutionKind::Compatible);
     }
 
@@ -92,9 +90,7 @@ mod tests {
     #[test]
     fn adding_an_optional_property_is_compatible() {
         let from = schema(r#"schema graph_v1 { node Person { id: NodeId } }"#);
-        let to = schema(
-            r#"schema graph_v2 { node Person { id: NodeId nickname: String? } }"#,
-        );
+        let to = schema(r#"schema graph_v2 { node Person { id: NodeId nickname: String? } }"#);
         assert_eq!(
             SpecSchemaEvolution.diff(&from, &to),
             EvolutionKind::Compatible
@@ -122,9 +118,7 @@ mod tests {
     /// *(task S5)* Adding a new edge type is compatible.
     #[test]
     fn adding_an_edge_type_is_compatible() {
-        let from = schema(
-            r#"schema graph_v1 { node Person { id: NodeId } }"#,
-        );
+        let from = schema(r#"schema graph_v1 { node Person { id: NodeId } }"#);
         let to = schema(
             r#"
             schema graph_v2 {
@@ -142,9 +136,7 @@ mod tests {
     /// *(task S6)* Removing a property is incompatible.
     #[test]
     fn removing_a_property_is_incompatible() {
-        let from = schema(
-            r#"schema graph_v1 { node Person { id: NodeId name: String } }"#,
-        );
+        let from = schema(r#"schema graph_v1 { node Person { id: NodeId name: String } }"#);
         let to = schema(r#"schema graph_v2 { node Person { id: NodeId } }"#);
 
         match SpecSchemaEvolution.diff(&from, &to) {
@@ -159,12 +151,8 @@ mod tests {
     /// *(task S6)* Changing a property's type is incompatible.
     #[test]
     fn changing_a_property_type_is_incompatible() {
-        let from = schema(
-            r#"schema graph_v1 { node Person { id: NodeId age: Int64 } }"#,
-        );
-        let to = schema(
-            r#"schema graph_v2 { node Person { id: NodeId age: String } }"#,
-        );
+        let from = schema(r#"schema graph_v1 { node Person { id: NodeId age: Int64 } }"#);
+        let to = schema(r#"schema graph_v2 { node Person { id: NodeId age: String } }"#);
 
         match SpecSchemaEvolution.diff(&from, &to) {
             EvolutionKind::Incompatible { reasons } => {
@@ -203,12 +191,8 @@ mod tests {
     /// has no explicit rename marker to distinguish the two.
     #[test]
     fn renaming_a_property_is_reported_as_a_removal() {
-        let from = schema(
-            r#"schema graph_v1 { node Person { id: NodeId name: String } }"#,
-        );
-        let to = schema(
-            r#"schema graph_v2 { node Person { id: NodeId full_name: String } }"#,
-        );
+        let from = schema(r#"schema graph_v1 { node Person { id: NodeId name: String } }"#);
+        let to = schema(r#"schema graph_v2 { node Person { id: NodeId full_name: String } }"#);
 
         match SpecSchemaEvolution.diff(&from, &to) {
             EvolutionKind::Incompatible { reasons } => {
