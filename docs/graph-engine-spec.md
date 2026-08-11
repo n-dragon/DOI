@@ -29,20 +29,43 @@ latence.
 | Runtime | Serveur avec API réseau (pas de mode embarqué) |
 | Langage de requête | DSL de traversal type Cypher/Gremlin |
 | Opérations prioritaires | Voisinage k-hop filtré, pattern matching |
-| Agrégation | **Aucune dans le moteur** — délégation en aval (voir §7.1, §1.3) |
+| Agrégation | **Aucune dans le moteur** — délégation en aval (voir §7.1, §1.4) |
 | Ingestion | Batch externe (Spark/Flink → Iceberg), pas d'écriture directe via le serveur |
 | Cohérence | Éventuelle, snapshot isolation en lecture (time-travel Iceberg) |
 | Rafraîchissement d'index | Reconstruction complète périodique (pas d'incrémental) |
 | Échelle | Cluster distribué, graphe partitionné |
-| Partitionnement | Hash-partitioning par `node_id` |
+| Partitionnement | Hash-partitioning par `node_id`, sur-partitionnement fixe (§6.2) |
+| Réplication / haute disponibilité | Répliques indépendantes sans consensus (pas de Raft), voir §6.4 |
 | Exécution distribuée multi-partitions | **Scatter-gather** orchestré par le coordinateur, hop par hop (voir §7.4) |
 | Schéma | Déclaratif, versionné, IDL dédiée, migrations |
 | Observabilité | Métriques (Prometheus) + tracing distribué (OpenTelemetry) |
-| Sécurité / AuthN-AuthZ | **Hors scope v1** — mis de côté délibérément (voir §1.3, §8.3) |
+| Sécurité / AuthN-AuthZ | **Hors scope v1** — mis de côté délibérément (voir §1.4, §8.3) |
 | Cible de déploiement | Kubernetes (voir §10) |
 | Objectifs de performance | Pas de cible chiffrée pour l'instant — décision différée (voir §13) |
 
-### 1.3 Non-objectifs (pour ce scope)
+### 1.3 Pourquoi ces choix structurants
+
+Le tableau §1.2 dit *quoi* ; les décisions les plus discutées (exécution
+distribuée, réplication, partitionnement, sécurité, déploiement...) ont
+leur justification détaillée dans leur section dédiée (renvois ci-dessous).
+Pour les choix fondateurs qui n'ont pas de section dédiée, la
+justification est résumée ici :
+
+| Dimension | Pourquoi |
+|---|---|
+| Rust | Pas de GC → latence prévisible pour un moteur qui sert un index en mémoire partagé entre threads/requêtes concurrentes ; sûreté mémoire (pas de data race) sur des structures concurrentes comme l'index CSR (§5.1) sans le coût d'un langage managé ; écosystème mature pour du réseau/systems programming (`tokio`, `tonic`). |
+| Property graph statiquement typé | Valider à l'ingestion plutôt qu'à la lecture (§3.1) suppose de connaître les types à l'avance ; permet un layout mémoire fixe par label (plus compact/rapide qu'une map dynamique par nœud) et la génération de bindings clients typés (§3.4). |
+| Apache Iceberg (stockage durable) | Schema evolution native (aligne §3.5 sans réimplémenter la logique de migration compatible) ; time-travel = snapshot isolation en lecture "gratuite" (§4.2) ; interopérable avec l'écosystème batch existant (Spark/Flink) plutôt que de réinventer un format de table ; durabilité/réplication déjà gérées par l'object storage sous-jacent — condition qui permet §6.4 (pas de Raft nécessaire). |
+| Index = topologique + propriété (rien de plus en v1) | Ce sont exactement les deux structures nécessaires aux deux opérations prioritaires actées (résolution du départ via propriété, §5.2 ; expansion via adjacence, §5.1) — pas de structure supplémentaire tant qu'un besoin ne le justifie pas (cf. index vectoriel/full-text, différés en Phase 4, §5.2). |
+| Runtime serveur réseau (pas de mode embarqué) | Un knowledge graph d'entreprise dépasse la mémoire d'un seul process client ; plusieurs clients doivent interroger le même graphe partagé sans dupliquer l'index ; découple le cycle de vie du moteur (rebuild, cluster) de celui des applications clientes. |
+| DSL type Cypher/Gremlin | Standard de facto pour le pattern matching sur property graph, syntaxe déjà connue de quiconque a pratiqué Neo4j/TinkerPop ; le `MATCH` correspond directement aux deux opérations prioritaires visées (§1.1) sans traduction conceptuelle. |
+| Ingestion batch externe (pas d'écriture directe) | Sépare le chemin de lecture à faible latence du traitement d'ingestion ; réutilise des moteurs de traitement batch/streaming déjà éprouvés (Spark/Flink) plutôt que d'en réimplémenter un dans le moteur graphe ; rend possible le modèle de cohérence simple retenu (pas d'écritures concurrentes à coordonner côté graphe). |
+| Cohérence éventuelle, snapshot isolation en lecture | Conséquence directe de la séparation lecture/écriture ci-dessus : fournie nativement par Iceberg (§4.2), suffisante pour un usage d'exploration/analyse où une staleness bornée est acceptable — pas besoin de transactions distribuées pour ce cas d'usage. |
+| Reconstruction complète périodique (pas d'incrémental en v1) | Plus simple à implémenter et à raisonner qu'un rebuild incrémental (pas de delta-state à réconcilier, pas de risque de référence orpheline) ; la staleness résultante est acceptable pour le cas d'usage (§5.3) — l'incrémental reste une optimisation future une fois le modèle validé (§12, Phase 4). |
+| Échelle distribuée dès la conception | Anticipe la taille réelle d'un knowledge graph d'entreprise (potentiellement au-delà de la mémoire d'une seule machine) ; partitionner dès l'architecture évite une réécriture structurelle majeure plus tard — même si le MVP (§12, Phase 1) démarre volontairement mono-partition pour valider le modèle avant de distribuer. |
+| Observabilité (Prometheus + OpenTelemetry) | Standards ouverts de l'écosystème cloud-native, cohérents avec la cible de déploiement Kubernetes (§10) ; large écosystème d'exporters/backends compatibles, pas de verrouillage propriétaire. |
+
+### 1.4 Non-objectifs (pour ce scope)
 
 - **AuthN/AuthZ** (§8.3) — mis de côté délibérément pour ce cadrage : pas
   d'authentification client, pas d'autorisation fine, pas d'audit log en
@@ -51,12 +74,15 @@ latence.
   reconsidérer explicitement si une mise en production hors environnement
   de confiance est envisagée un jour.
 - Écritures transactionnelles temps réel multi-nœuds/arêtes avec garanties
-  ACID fortes (le modèle retenu est snapshot/eventual consistency).
+  ACID fortes (le modèle retenu est snapshot/eventual consistency — pourquoi,
+  voir §1.3 "Cohérence éventuelle").
 - Algorithmes analytiques globaux lourds (PageRank, détection de communautés)
   en v1 — ils sont repoussés en phase ultérieure (§12) et pourraient être
-  délégués à un moteur externe (Spark/DataFusion) plutôt que réimplémentés.
+  délégués à un moteur externe (Spark/DataFusion) plutôt que réimplémentés :
+  même logique que pour l'index vectoriel/full-text (§5.2) — mieux traité
+  par un moteur spécialisé que réimplémenté ici.
 - Mode embarqué (librairie in-process) — hors scope, le moteur est un
-  serveur réseau dès la v1.
+  serveur réseau dès la v1 (pourquoi, voir §1.3 "Runtime serveur réseau").
 - **Agrégation** (`COUNT`, `SUM`, `AVG`, `GROUP BY`, `COLLECT`, etc.) — le
   moteur reste un pur moteur de **traversal / pattern-matching**. Toute
   agrégation sur les résultats est déléguée en aval, hors du moteur graphe
@@ -125,9 +151,19 @@ Le graphe est un **property graph statiquement typé** :
 
 ### 3.3 Identité des nœuds et arêtes
 
-- `node_id` : identifiant unique global, `UInt64` généré par le pipeline
-  d'ingestion (ou dérivé d'une clé métier via hachage stable — **TBD**, voir
-  §13). Sert de clé de partitionnement (hash-partitioning).
+- `node_id` : identifiant unique global, `UInt64`. **Décision actée (§13) :
+  double mode.**
+  - Si la donnée source porte une clé métier stable, le pipeline
+    d'ingestion **fournit explicitement** `node_id` (dérivé par hachage
+    stable de cette clé) — garantit l'**idempotence** : une réingestion de
+    la même entité retombe sur le même `node_id` et met à jour le nœud
+    existant au lieu d'en créer un doublon.
+  - Sinon (pas de clé métier stable disponible en source), `node_id` est
+    **généré** par le pipeline (compteur ou UUID) — pas de garantie
+    d'idempotence dans ce cas : une réingestion sans corrélation explicite
+    avec la source peut créer un nouveau nœud plutôt que mettre à jour
+    l'existant.
+  - Sert de clé de partitionnement (hash-partitioning) dans les deux cas.
 - `edge_id` : identifiant unique global `UInt64`, indépendant de
   `(src, dst, type)` pour permettre des arêtes multiples entre les deux mêmes
   nœuds (multigraphe).
@@ -251,8 +287,14 @@ schema graph_v1 {
   `MATCH (p:Person {name: "Alice"})`) avant d'entrer dans le moteur de
   traversal topologique.
 - Index full-text et index vectoriel (embeddings) : **hors scope v1**, notés
-  comme extension future (§13) — non retenus dans le cadrage initial en
-  dehors de propriété + topologique.
+  comme extension future (§12 Phase 4, §13) — non retenus dans le cadrage
+  initial en dehors de propriété + topologique. Pourquoi : ce sont des
+  paradigmes d'indexation différents (recherche approximative par
+  similarité vs recherche exacte par égalité/range) qui répondent à un
+  besoin distinct des deux opérations prioritaires actées (k-hop filtré,
+  pattern matching, §1.1) ; mieux traités par des moteurs spécialisés
+  existants que réimplémentés dans ce moteur — même logique que pour les
+  algorithmes analytiques globaux (§1.4).
 
 ### 5.3 Stratégie de rafraîchissement
 
@@ -291,12 +333,22 @@ schema graph_v1 {
 
 - **Hash-partitioning** par `node_id` : `partition_id = hash(node_id) %
   n_partitions`.
-- Rebalancement lors d'un changement de `n_partitions` : **TBD** — implique
-  a minima un rebuild complet des index sur les partitions affectées
-  (cohérent avec la stratégie de rebuild périodique déjà retenue).
-- Réplication des partitions pour la haute disponibilité : **TBD** (non
-  cadré) — à trancher avant mise en production (facteur de réplication,
-  stratégie de failover).
+- **Décision actée : sur-partitionnement fixe, découplé du nombre de
+  machines.** `n_partitions` est un nombre **logique fixé une fois pour
+  toutes** à la création du graphe, volontairement sur-dimensionné par
+  rapport au nombre de nœuds de calcul initial (ex: 100 partitions
+  logiques pour 3 machines). Ce nombre **ne change jamais** — donc
+  `hash(node_id) % n_partitions` reste stable dans le temps, et aucun nœud
+  ne change jamais de partition logique.
+- **Rebalancement = réaffectation physique, pas rehash.** Ajouter ou
+  retirer une machine ne touche qu'à la table d'affectation "partition
+  logique → machine physique" : on déplace un sous-ensemble de partitions
+  logiques existantes d'une machine à une autre. Seules les partitions
+  déplacées ont leur index reconstruit sur leur nouvelle machine
+  (cohérent avec la stratégie de rebuild périodique déjà retenue, §5.3) —
+  pas de rebuild global du graphe. Modèle inspiré de Nebula Graph /
+  consistent hashing (Cassandra).
+- Réplication des partitions pour la haute disponibilité : voir §6.4.
 
 ### 6.3 Membership et découverte
 
@@ -304,6 +356,43 @@ schema graph_v1 {
   **intégration native Kubernetes** (API des Pods/Endpoints, ou headless
   Service) — décision alignée sur le choix de cible de déploiement (§10).
   Pas de registre externe (etcd/Consul) dédié en v1.
+
+### 6.4 Réplication et haute disponibilité
+
+**Décision actée : répliques indépendantes sans protocole de consensus.**
+
+À la différence des bases de graphe qui acceptent des écritures (Neo4j,
+Dgraph, Nebula Graph, TigerGraph — toutes s'appuient sur **Raft**, un
+protocole de consensus, pour mettre d'accord plusieurs répliques sur
+l'ordre des écritures), notre moteur n'a pas de write path (§4.3) : la
+donnée durable vit dans Iceberg, déjà répliquée par l'object storage
+sous-jacent. L'index en mémoire d'une partition est **entièrement dérivé
+et rebuildable** à partir d'un snapshot Iceberg figé (§5.3).
+
+Conséquence : pas besoin de consensus entre répliques.
+
+- Chaque partition logique a **N répliques** (facteur configurable, ex: 3),
+  hébergées sur des machines distinctes.
+- Chaque réplique **reconstruit indépendamment** le même index à partir du
+  même snapshot Iceberg épinglé (§5.3) — aucune coordination ni échange de
+  données entre répliques n'est nécessaire pour qu'elles convergent vers
+  un état identique.
+- Le coordinateur route chaque requête vers **n'importe quelle réplique
+  saine** de la partition concernée (round-robin ou least-loaded) —
+  toutes les répliques étant équivalentes, il n'y a pas de notion de
+  leader/follower à gérer côté lecture.
+- **Failover** : en cas de panne d'une réplique, le coordinateur cesse de
+  lui router du trafic (détecté via `HealthCheck`, §8.2) ; une nouvelle
+  réplique est provisionnée et reconstruit son index en tâche de fond,
+  selon le même mécanisme que le rebalancement (§6.2) — pas d'interruption
+  de service tant qu'au moins une réplique saine reste disponible par
+  partition.
+
+Ce modèle est nettement plus simple à opérer que Raft-par-partition — il
+n'est possible que parce que l'architecture est lecture seule avec un état
+entièrement dérivable d'une source durable externe, plutôt qu'un
+compromis de facilité : c'est une conséquence directe des décisions déjà
+actées (§4.3, §5.3).
 
 ---
 
@@ -325,13 +414,13 @@ schema graph_v1 {
     WHERE p.name = "Alice" AND colleague <> p
     RETURN colleague, o
     ```
-- Hors scope v1 (noté explicitement, cf. §1.3 et §12) : `shortest path`,
+- Hors scope v1 (noté explicitement, cf. §1.4 et §12) : `shortest path`,
   algorithmes analytiques globaux.
 - **Pas d'agrégation** : le DSL ne comporte volontairement **aucune**
   fonction d'agrégation (`COUNT`, `SUM`, `AVG`, `MIN`/`MAX`, `COLLECT`) ni
   clause `GROUP BY`. `RETURN` ne fait que **projeter** les nœuds/arêtes/
   propriétés matchés par le `MATCH`, sans les réduire ni les regrouper —
-  décision actée (§1.3), pas un TBD. Un besoin d'agrégation se traite en
+  décision actée (§1.4), pas un TBD. Un besoin d'agrégation se traite en
   aval de la réponse streamée du moteur (§7.5), côté client ou via un
   moteur externe (DataFusion/Spark) sur les résultats bruts exportés.
 - Grammaire formelle complète, gestion des alias, clauses `ORDER BY` /
@@ -550,6 +639,18 @@ Métriques minimales à exposer par composant :
 
 **Décision actée : Kubernetes.**
 
+Pourquoi Kubernetes plutôt qu'une alternative plus simple (VMs/systemd) :
+c'est la cible standard de facto pour orchestrer des services distribués
+stateful, avec des primitives qui correspondent directement à notre
+modèle — `StatefulSet` pour l'identité stable requise par le mapping
+partition ↔ pod (§6.2), découverte native de services (§6.3) sans
+registre externe à opérer, et intégration directe avec la stack
+d'observabilité déjà retenue (Prometheus/OpenTelemetry, §9). Le coût
+opérationnel de K8s est assumé au regard de l'échelle visée (cluster
+distribué et partitionné dès la conception, §1.3) — une alternative plus
+simple resterait pertinente pour un déploiement mono-machine ou à très
+petite échelle, ce qui n'est pas le scope ici.
+
 - **StatefulSet** pour les nœuds de partition — identité stable requise pour
   le mapping partition ↔ pod (§6.2).
 - **Deployment** pour les coordinateurs si le rôle est séparé du rôle
@@ -593,34 +694,43 @@ Métriques minimales à exposer par composant :
 
 ## 13. Questions ouvertes (à trancher avant/pendant l'implémentation)
 
-1. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
-   dérivé d'une clé métier par hachage stable — impacte l'idempotence des
-   réingestions.
-2. **Rebalancement du partitionnement** en cas de changement du nombre de
-   partitions.
-3. **Réplication / haute disponibilité** des nœuds de partition.
-4. **Migration de schéma incompatible** : processus détaillé non spécifié
-   (§3.5).
-5. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
-   pour un knowledge graph mais explicitement repoussés hors du cadrage
-   initial (indexation retenue = topologique + propriété uniquement) —
-   à réévaluer en Phase 4.
-6. **Protocole de transport de l'API** (§8.1) : gRPC proposé par défaut,
+1. **Migration de schéma incompatible** : processus détaillé non spécifié
+   (§3.5) — laissé volontairement en `TBD`, à traiter au moment où le
+   besoin se présente plutôt qu'anticipé dans ce cadrage.
+2. **Protocole de transport de l'API** (§8.1) : gRPC proposé par défaut,
    non confirmé.
-7. **Partition spec Iceberg** (§4.1) : alignement du partitionnement
+3. **Partition spec Iceberg** (§4.1) : alignement du partitionnement
    physique des tables avec le partitionnement logique du cluster, non
    tranché.
-8. **Stratégie de join pour le pattern matching multi-jambes** (§7.4.1) :
+4. **Stratégie de join pour le pattern matching multi-jambes** (§7.4.1) :
    hash-join en mémoire côté coordinateur vs join distribué — non bloquant
    pour un premier plan d'exécution naïf, mais à approfondir.
-9. **Politique de tolérance aux pannes du scatter-gather** (§7.4.4) :
+5. **Politique de tolérance aux pannes du scatter-gather** (§7.4.4) :
    fail-fast vs résultats partiels en cas de timeout/échec d'une partition
    pendant un hop ; nombre de retries et backoff.
-10. **Limites/backpressure de frontière** (§7.4.5) : taille max de
-    frontière par hop, budget mémoire par requête côté coordinateur, et
-    lien avec une clause `LIMIT` du DSL (elle-même non encore spécifiée,
-    §7.1).
+6. **Limites/backpressure de frontière** (§7.4.5) : taille max de
+   frontière par hop, budget mémoire par requête côté coordinateur, et
+   lien avec une clause `LIMIT` du DSL (elle-même non encore spécifiée,
+   §7.1).
 
+> **Mis de côté (décision de scope, pas un TBD)** : index vectoriel
+> (embeddings) et index full-text — confirmés hors scope v1, repoussés en
+> Phase 4 si le besoin se confirme. Indexation v1 = topologique + propriété
+> uniquement (§5.2). Voir §12.
+>
+> **Résolu** : réplication / haute disponibilité — répliques indépendantes
+> sans consensus (pas de Raft), chaque réplique reconstruit le même index
+> depuis le même snapshot Iceberg ; possible uniquement parce que le moteur
+> est lecture seule avec état dérivable. Voir §6.4.
+>
+> **Résolu** : rebalancement du partitionnement — sur-partitionnement fixe
+> découplé du nombre de machines ; rebalancer = réaffecter des partitions
+> logiques existantes à d'autres machines, pas rehasher. Voir §6.2.
+>
+> **Résolu** : génération de `node_id` en double mode — fourni
+> explicitement (hachage d'une clé métier stable) si la source en a une,
+> sinon généré par le pipeline. Voir §3.3.
+>
 > **Résolu** : label unique par nœud, pas de multi-label — le besoin de
 > facettes multiples se modélise par une arête dédiée entre nœuds distincts.
 > Voir §3.1.
@@ -628,7 +738,9 @@ Métriques minimales à exposer par composant :
 > **Résolu** : la cible de déploiement est actée sur Kubernetes — voir §10.
 >
 > **Résolu** : l'exécution distribuée multi-partitions est actée en
-> scatter-gather piloté par le coordinateur — voir §7.4.
+> scatter-gather piloté par le coordinateur, détaillée en §7.4.1-§7.4.6
+> (protocole, déduplication/cycles, tolérance aux pannes, backpressure) —
+> voir §7.4.
 >
 > **Différé explicitement (pas un TBD bloquant)** : les objectifs de
 > performance chiffrés (latence p99, throughput, taille de graphe
@@ -637,4 +749,4 @@ Métriques minimales à exposer par composant :
 > (benchmarking sur données réelles plutôt que cibles théoriques a priori).
 >
 > **Mis de côté (décision de scope, pas un TBD)** : la sécurité
-> (AuthN/AuthZ) est explicitement hors scope v1 — voir §1.3, §8.3.
+> (AuthN/AuthZ) est explicitement hors scope v1 — voir §1.4, §8.3.
