@@ -1,0 +1,35 @@
+schema graph_v1 {
+  node CloudAccount {
+    id: NodeId
+    @indexed account_id: String
+    provider: String
+  }
+
+  node Resource {
+    id: NodeId
+    @indexed name: String
+    resource_type: String
+    region: String
+  }
+
+  node CostRecord {
+    id: NodeId
+    @indexed amount_usd: Int64
+    period: String
+  }
+
+  edge OWNS {
+    from: CloudAccount
+    to: Resource
+  }
+
+  edge CONTAINS {
+    from: Resource
+    to: Resource
+  }
+
+  edge HAS_COST {
+    from: Resource
+    to: CostRecord
+  }
+}

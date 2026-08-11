@@ -16,25 +16,32 @@ which hydrates each matched `NodeId` with its actual property record).
 
 ## Running it
 
-From `graph-engine/`, with a warehouse already ingested (see
-`examples/ingest-cloud-cost`'s own doc comment):
+From `graph-engine/`, four terminals:
 
 ```sh
 # 1. ingest the demo dataset into a persistent Iceberg catalog
+#    (creates ./warehouse and ./catalog.sqlite in the cwd)
 cargo run -p ingest-cloud-cost
 
-# 2/3. the two engine processes, each in its own terminal
-cargo run -p graph-partition-node
-cargo run -p graph-coordinator
+# 2. the partition node — needs the schema both it and the coordinator
+#    parse (schema/cloud_cost.graphidl matches examples/ingest-cloud-cost
+#    exactly; it's what the WHERE/RETURN clauses get validated against)
+GRAPH_SCHEMA_PATH=schema/cloud_cost.graphidl cargo run -p graph-partition-node
 
-# 4. the viewer's HTTP bridge (serves this directory + proxies queries)
+# 3. the coordinator — same schema path
+GRAPH_SCHEMA_PATH=schema/cloud_cost.graphidl cargo run -p graph-coordinator
+
+# 4. the viewer's HTTP bridge (serves viewer/ + proxies queries to the coordinator)
 cargo run -p graph-viewer-server
 ```
 
+Run each from `graph-engine/` (relative paths like `./warehouse` and
+`schema/cloud_cost.graphidl` are resolved from the current directory).
 Then open <http://localhost:8080>. `GRAPH_COORDINATOR_ADDR`,
-`GRAPH_VIEWER_STATIC_DIR`, and `GRAPH_VIEWER_LISTEN_ADDR` override the
-defaults if you're not running everything on localhost with default
-ports.
+`GRAPH_VIEWER_STATIC_DIR`, `GRAPH_VIEWER_LISTEN_ADDR`,
+`GRAPH_PARTITION_NODE_ADDR`, `GRAPH_WAREHOUSE_PATH`, and
+`GRAPH_CATALOG_DB_PATH` override the defaults if you're not running
+everything on localhost from the same working directory.
 
 Toggle between "full graph" (every node/edge, colored by type) and
 "query result" (the traversal highlighted, each excluded node annotated

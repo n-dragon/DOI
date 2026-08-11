@@ -45,6 +45,10 @@ use parquet::file::properties::WriterProperties;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// Kept identical to `schema/cloud_cost.graphidl` — that file is what
+// `graph-partition-node`/`graph-coordinator` load via GRAPH_SCHEMA_PATH
+// for the multi-process deployment; this constant is this binary's own
+// in-process copy so `graph-engine-demo` has no file-path dependency.
 const SCHEMA_IDL: &str = r#"
 schema graph_v1 {
   node CloudAccount {
