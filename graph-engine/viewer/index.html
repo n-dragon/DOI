@@ -1,5 +1,7 @@
 <meta charset="UTF-8">
-<title>Cloud Cost Management, as a graph</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One Cloud Inventory, Two Questions</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg stroke='%23632ca6' stroke-width='2.5' fill='none'%3E%3Cpath d='M8 8L24 16M8 8L8 24M8 24L24 16'/%3E%3C/g%3E%3Cg fill='%23632ca6'%3E%3Ccircle cx='8' cy='8' r='5'/%3E%3Ccircle cx='8' cy='24' r='5'/%3E%3Ccircle cx='24' cy='16' r='5'/%3E%3C/g%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #ffffff;
@@ -24,6 +26,9 @@
     --result-ring: #632ca6;
     --danger: #a3244f;
     --danger-bg: #fbe7ee;
+    --node-role: #6b4fa0;
+    --node-store: #b2504a;
+    --node-traversed: #8f86ab;
     --shadow: 0 1px 2px rgba(40, 20, 70, 0.06), 0 8px 24px rgba(40, 20, 70, 0.07);
   }
 
@@ -51,7 +56,10 @@
       --result-ring: #b47bff;
       --danger: #ff7aa2;
       --danger-bg: #3a1626;
-      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+      --node-role: #a98cd8;
+      --node-store: #e88b83;
+      --node-traversed: #9d94ba;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
     }
   }
 
@@ -78,6 +86,9 @@
     --result-ring: #b47bff;
     --danger: #ff7aa2;
     --danger-bg: #3a1626;
+    --node-role: #a98cd8;
+    --node-store: #e88b83;
+    --node-traversed: #9d94ba;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
   }
 
@@ -135,6 +146,61 @@
     margin: 0;
     max-width: 62ch;
   }
+
+  /* ---- use-case tabs ---- */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .tabs button {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 10px 16px;
+    cursor: pointer;
+    color: var(--ink-muted);
+    font-size: 13.5px;
+    font-weight: 600;
+    font-family: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+  }
+
+  .tabs button .tab-sub {
+    font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--ink-faint);
+    letter-spacing: 0.02em;
+  }
+
+  .tabs button:hover { color: var(--ink); }
+
+  .tabs button[aria-selected="true"] {
+    color: var(--accent-flow);
+    border-bottom-color: var(--accent-flow);
+  }
+  .tabs button[aria-selected="true"] .tab-sub { color: var(--accent-flow); }
+  .tabs button:focus-visible { outline: 2px solid var(--accent-flow); outline-offset: -2px; }
+
+  .usecase[hidden] { display: none; }
+
+  .usecase-lede {
+    color: var(--ink-muted);
+    font-size: 14px;
+    margin: 0 0 18px;
+    max-width: 74ch;
+  }
+
+  .main-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
   .layout {
     display: grid;
@@ -249,28 +315,39 @@
   }
 
   /* ---- query mode state ---- */
-  body.mode-query .node[data-status="excluded"] rect {
+  .usecase.mode-query .node[data-status="excluded"] rect {
     fill: var(--excluded-fill);
     stroke: var(--excluded-stroke);
   }
-  body.mode-query .node[data-status="excluded"] .label,
-  body.mode-query .node[data-status="excluded"] .sub { fill: var(--excluded-text); }
-  body.mode-query .node[data-status="excluded"] .why { opacity: 1; }
+  .usecase.mode-query .node[data-status="excluded"] .label,
+  .usecase.mode-query .node[data-status="excluded"] .sub { fill: var(--excluded-text); }
+  .usecase.mode-query .node[data-status="excluded"] .why { opacity: 1; }
 
-  body.mode-query .node[data-status="included"] rect {
+  .usecase.mode-query .node[data-status="included"] rect {
     stroke: var(--result-ring);
     stroke-width: 3;
   }
-  body.mode-query .node[data-status="included"] .badge { opacity: 1; }
+  .usecase.mode-query .node[data-status="included"] .badge { opacity: 1; }
 
-  body.mode-query .edge.edge--in-range { stroke: var(--accent-flow); stroke-width: 2.2; }
-  body.mode-query .edge.edge--out-of-range { stroke: var(--excluded-stroke); stroke-dasharray: 2 4; }
+  .usecase.mode-query .edge.edge--in-range { stroke: var(--accent-flow); stroke-width: 2.2; }
+  .usecase.mode-query .edge.edge--out-of-range { stroke: var(--excluded-stroke); stroke-dasharray: 2 4; }
 
-  body.mode-query .edge--cost[data-result="included"] { stroke: var(--result-ring); stroke-width: 2; }
-  body.mode-query .edge--cost[data-result="excluded"] { stroke: var(--excluded-stroke); }
+  /* A node the traversal walked *through* but that no returned alias
+     projects — the intermediate hop of a `*1..3` range. Neither a
+     result nor a rejection, so it gets its own state rather than being
+     greyed out like something the pattern never reached. */
+  .usecase.mode-query .node[data-status="traversed"] rect {
+    stroke: var(--node-traversed);
+    stroke-width: 2;
+    stroke-dasharray: 4 3;
+  }
+  .usecase.mode-query .node[data-status="traversed"] .why { opacity: 1; }
+
+  .usecase.mode-query .edge--cost[data-result="included"] { stroke: var(--result-ring); stroke-width: 2; }
+  .usecase.mode-query .edge--cost[data-result="excluded"] { stroke: var(--excluded-stroke); }
 
   /* full-graph mode: hide query-only chrome */
-  body:not(.mode-query) .node[data-status] rect { stroke: var(--border); }
+  .usecase:not(.mode-query) .node[data-status] rect { stroke: var(--border); }
 
   .side {
     display: flex;
@@ -391,7 +468,7 @@
     border-bottom: 1px dashed var(--border);
   }
   .pipeline-step:last-child { border-bottom: 0; }
-  .pipeline-step .cmd { color: var(--ink); }
+  .pipeline-step .cmd { color: var(--ink); flex: none; width: 116px; }
 
   footer.page {
     margin-top: 40px;
@@ -408,25 +485,42 @@
 
 <div class="wrap">
   <header class="page">
-    <div class="eyebrow">graph-engine · knowledge graph for cloud cost management</div>
-    <h1>Cloud Cost Management, as a graph</h1>
+    <div class="eyebrow">graph-engine · one knowledge graph, two lenses</div>
+    <h1>One cloud inventory, two questions</h1>
     <p class="lede">
-      A cloud-resource inventory joined to a separate billing dataset — the join is a real
-      edge in the graph, not a runtime SQL join. This page is served by
-      <code class="mono">graph-viewer-server</code> and calls it over HTTP to run your query
-      against a live <code class="mono">graph-coordinator</code>, the same one
-      <code class="mono">query-client</code> talks to — no query logic runs in this browser.
-      Edit the query on the right and run it.
+      The same <code class="mono">Resource</code> nodes, joined to a billing feed and to an
+      identity/posture feed — both joins are real edges in the graph, not runtime SQL joins.
+      This page is served by <code class="mono">graph-viewer-server</code> and calls it over
+      HTTP to run your query against a live <code class="mono">graph-coordinator</code>, the
+      same one <code class="mono">query-client</code> talks to. No query logic runs in this
+      browser.
     </p>
   </header>
 
-  <div class="layout">
+  <div class="tabs" role="tablist" aria-label="Use case">
+    <button type="button" role="tab" data-tab="cost" aria-selected="true" aria-controls="panel-cost" id="tab-cost">
+      Cloud cost
+      <span class="tab-sub">what does this resource cost?</span>
+    </button>
+    <button type="button" role="tab" data-tab="security" aria-selected="false" aria-controls="panel-security" id="tab-security" tabindex="-1">
+      Attack paths
+      <span class="tab-sub">can the internet reach our PII?</span>
+    </button>
+  </div>
+
+  <section class="usecase" data-usecase="cost" id="panel-cost" role="tabpanel" aria-labelledby="tab-cost">
+    <p class="usecase-lede">
+      A resource hierarchy joined to a separate billing dataset. Traversal answers which
+      resources sit under an account and what each one costs — the join is an edge.
+    </p>
+    <div class="layout">
+      <div class="main-col">
     <div class="card diagram-card">
       <div class="diagram-toolbar">
         <span class="diagram-title">prod-aws · us-east-1</span>
         <div class="toggle" role="group" aria-label="Diagram mode">
-          <button type="button" id="btn-full" aria-pressed="true">full graph</button>
-          <button type="button" id="btn-query" aria-pressed="false">query result</button>
+          <button type="button" data-role="btn-full" aria-pressed="true">full graph</button>
+          <button type="button" data-role="btn-query" aria-pressed="false">query result</button>
         </div>
       </div>
 
@@ -461,21 +555,21 @@
         </g>
 
         <!-- resource hierarchy nodes -->
-        <g class="node" data-id="account" data-status="n-a">
+        <g class="node" data-id="account" data-node-key="CloudAccount:123456789012" data-status="n-a">
           <rect x="255" y="28" width="150" height="44" rx="8" fill="var(--node-account)" stroke="var(--node-account)"></rect>
           <text class="label" x="330" y="46" text-anchor="middle">prod-aws</text>
           <text class="sub mono" x="330" y="61" text-anchor="middle">CloudAccount</text>
           <title>CloudAccount · account_id 123456789012 · provider aws</title>
         </g>
 
-        <g class="node" data-id="vpc" data-status="n-a">
+        <g class="node" data-id="vpc" data-node-key="Resource:vpc-prod" data-status="n-a">
           <rect x="255" y="128" width="150" height="44" rx="8" fill="var(--node-vpc)" stroke="var(--node-vpc)"></rect>
           <text class="label" x="330" y="146" text-anchor="middle">vpc-prod</text>
           <text class="sub mono" x="330" y="161" text-anchor="middle">Resource · vpc</text>
           <title>Resource · vpc-prod · type vpc · us-east-1</title>
         </g>
 
-        <g class="node" data-id="subnet" data-status="excluded">
+        <g class="node" data-id="subnet" data-node-key="Resource:subnet-prod-a" data-status="excluded">
           <rect x="130" y="228" width="150" height="40" rx="8" fill="var(--node-subnet)" stroke="var(--node-subnet)"></rect>
           <text class="label" x="205" y="245" text-anchor="middle">subnet-prod-a</text>
           <text class="sub mono" x="205" y="259" text-anchor="middle">Resource · subnet</text>
@@ -484,7 +578,7 @@
           <title>Resource · subnet-prod-a · type subnet · us-east-1 · 1 hop from vpc-prod</title>
         </g>
 
-        <g class="node" data-id="rds" data-status="included">
+        <g class="node" data-id="rds" data-node-key="Resource:rds-orders-db" data-status="included">
           <rect x="425" y="228" width="150" height="40" rx="8" fill="var(--node-rds)" stroke="var(--node-rds)"></rect>
           <text class="label" x="500" y="245" text-anchor="middle">rds-orders-db</text>
           <text class="sub mono" x="500" y="259" text-anchor="middle">Resource · rds_instance</text>
@@ -493,7 +587,7 @@
           <title>Resource · rds-orders-db · type rds_instance · us-east-1 · 1 hop from vpc-prod</title>
         </g>
 
-        <g class="node" data-id="i1" data-status="included">
+        <g class="node" data-id="i1" data-node-key="Resource:i-checkout-api-1" data-status="included">
           <rect x="0" y="328" width="170" height="40" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
           <text class="label" x="85" y="345" text-anchor="middle">i-checkout-api-1</text>
           <text class="sub mono" x="85" y="359" text-anchor="middle">Resource · ec2_instance</text>
@@ -502,7 +596,7 @@
           <title>Resource · i-checkout-api-1 · type ec2_instance · us-east-1 · 2 hops from vpc-prod</title>
         </g>
 
-        <g class="node" data-id="i2" data-status="excluded">
+        <g class="node" data-id="i2" data-node-key="Resource:i-checkout-api-2" data-status="excluded">
           <rect x="195" y="328" width="170" height="40" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
           <text class="label" x="280" y="345" text-anchor="middle">i-checkout-api-2</text>
           <text class="sub mono" x="280" y="359" text-anchor="middle">Resource · ec2_instance</text>
@@ -511,7 +605,7 @@
           <title>Resource · i-checkout-api-2 · type ec2_instance · us-east-1 · 2 hops from vpc-prod</title>
         </g>
 
-        <g class="node" data-id="vol" data-status="excluded">
+        <g class="node" data-id="vol" data-node-key="Resource:vol-checkout-api-1" data-status="excluded">
           <rect x="-10" y="428" width="180" height="40" rx="8" fill="var(--node-storage)" stroke="var(--node-storage)"></rect>
           <text class="label" x="80" y="445" text-anchor="middle">vol-checkout-api-1</text>
           <text class="sub mono" x="80" y="459" text-anchor="middle">Resource · ebs_volume</text>
@@ -520,7 +614,7 @@
           <title>Resource · vol-checkout-api-1 · type ebs_volume · us-east-1 · 3 hops from vpc-prod</title>
         </g>
 
-        <g class="node" data-id="snap" data-status="excluded">
+        <g class="node" data-id="snap" data-node-key="Resource:snap-checkout-api-1" data-status="excluded">
           <rect x="-10" y="528" width="180" height="40" rx="8" fill="var(--node-storage)" stroke="var(--node-storage)"></rect>
           <text class="label" x="80" y="545" text-anchor="middle">snap-checkout-api-1</text>
           <text class="sub mono" x="80" y="559" text-anchor="middle">Resource · ebs_snapshot</text>
@@ -567,6 +661,198 @@
         Solid arrows: <code class="mono">OWNS</code> / <code class="mono">CONTAINS</code> (the resource hierarchy). Dashed lines: <code class="mono">HAS_COST</code>, joining each resource to its billing record. Hover any node for its properties.
       </figcaption>
     </div>
+    <div class="card panel">
+      <h2>Where this stops</h2>
+      <p class="empty-hint">The engine has no <code class="mono">SUM</code>, no <code class="mono">GROUP BY</code> — aggregation is an explicit non-goal (spec §1.4). So it answers <em>which</em> resources cost more than $100, never <em>how much</em> the team spends in total. That number belongs downstream, on the streamed rows. The other tab is the shape this engine is actually built for.</p>
+    </div>
+    </div>
+    <div class="side">
+      <div class="card panel">
+        <div class="panel-head">
+          <h2>Query</h2>
+          <span class="panel-head-hint">edit &amp; run</span>
+        </div>
+        <textarea data-role="query-input" class="query-editor mono" spellcheck="false" autocomplete="off" rows="8">MATCH (a:CloudAccount {account_id: "123456789012"})
+  -[:OWNS]-&gt; (vpc:Resource)
+  -[:CONTAINS*1..3]-&gt; (r:Resource)
+  -[:HAS_COST]-&gt; (c:CostRecord)
+WHERE c.amount_usd &gt; 100
+RETURN r, c</textarea>
+        <div class="query-actions">
+          <button type="button" data-role="btn-run" class="btn btn-primary">Run query</button>
+          <button type="button" data-role="btn-reset" class="btn btn-ghost">Reset</button>
+        </div>
+        <p class="query-error" data-role="query-error" role="alert" hidden></p>
+        <p class="empty-hint" data-role="query-status" style="margin-top:10px;">Sent as-is to <code class="mono">POST /api/query</code>, parsed and executed by the real <code class="mono">graph-coordinator</code>. Include both <code class="mono">r</code> and <code class="mono">c</code> in <code class="mono">RETURN</code> to see resource name and cost together.</p>
+      </div>
+
+      <div class="card panel">
+        <h2 data-role="results-title">Dataset</h2>
+        <div data-role="results-body"></div>
+      </div>
+
+      <div class="card panel">
+        <h2>Node types</h2>
+        <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-account)"></span><span class="name">CloudAccount</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-vpc)"></span><span class="name">Resource · vpc / subnet</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-storage)"></span><span class="name">Resource · ebs_volume / snapshot</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-rds)"></span><span class="name">Resource · rds_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-cost); border:1.5px solid var(--accent-cost)"></span><span class="name">CostRecord</span></div></div>
+        <p class="empty-hint" style="margin-top:10px;">Color shows the <code class="mono">resource_type</code> property — the schema has one <code class="mono">Resource</code> label, not one per cloud service.</p>
+      </div>
+    </div>
+
+    </div>
+  </section>
+
+  <section class="usecase" data-usecase="security" id="panel-security" role="tabpanel" aria-labelledby="tab-security" hidden>
+    <p class="usecase-lede">
+      A CSPM raises thousands of findings; almost none are exploitable on their own. The question
+      worth answering is whether a chain exists from something internet-facing to something
+      classified — a vulnerable box that runs as a modest role, which can assume a role, which
+      can read the customer-data store. <strong>That chain is a path in a graph</strong>, and
+      nothing but a traversal computes it. Bounded role-assumption hops
+      (<code class="mono">*1..3</code>) are exactly this engine's priority primitive, and the
+      answer is the path itself — so the missing aggregation never bites.
+    </p>
+    <div class="layout">
+      <div class="main-col">
+    <div class="card diagram-card">
+      <div class="diagram-toolbar">
+        <span class="diagram-title">prod-aws · identity &amp; data-access posture</span>
+        <div class="toggle" role="group" aria-label="Diagram mode">
+          <button type="button" data-role="btn-full" aria-pressed="true">full graph</button>
+          <button type="button" data-role="btn-query" aria-pressed="false">query result</button>
+        </div>
+      </div>
+
+      <svg class="graph" viewBox="0 0 1180 455" role="img" aria-label="Graph of cloud resources, the IAM roles they run as, the roles those can assume, and the data stores each role can read — with the current query's attack path highlighted in query mode.">
+        <defs>
+          <marker id="arrow-sec" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L8,4 L0,8 z" fill="var(--ink-faint)"></path>
+          </marker>
+        </defs>
+
+        <text x="105" y="45" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">resources</text>
+        <text x="365" y="45" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">roles they run as</text>
+        <text x="690" y="45" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">assumable roles</text>
+        <text x="1080" y="45" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">data stores</text>
+
+        <!-- RUNS_AS / CAN_ASSUME. data-from/data-to name the two endpoints:
+             an edge lights up only when *both* ends are on the traversal,
+             so the same role reached from an excluded resource stays dark. -->
+        <g>
+          <line class="edge" data-from="r1" data-to="role1" marker-end="url(#arrow-sec)" x1="200" y1="118" x2="273" y2="118"></line>
+          <line class="edge" data-from="r2" data-to="role1" marker-end="url(#arrow-sec)" x1="200" y1="250" x2="273" y2="132"></line>
+          <line class="edge" data-from="r3" data-to="role4" marker-end="url(#arrow-sec)" x1="200" y1="380" x2="273" y2="380"></line>
+          <line class="edge" data-from="role1" data-to="role2" marker-end="url(#arrow-sec)" x1="455" y1="118" x2="518" y2="118"></line>
+          <line class="edge" data-from="role2" data-to="role3" marker-end="url(#arrow-sec)" x1="690" y1="118" x2="748" y2="118"></line>
+        </g>
+
+        <!-- CAN_READ, dashed like HAS_COST: the join to what actually matters -->
+        <g>
+          <line class="edge edge--cost" data-from="role3" data-to="ds1" marker-end="url(#arrow-sec)" x1="930" y1="118" x2="988" y2="118"></line>
+          <line class="edge edge--cost" data-from="role4" data-to="ds2" marker-end="url(#arrow-sec)" x1="455" y1="380" x2="988" y2="380"></line>
+          <line class="edge edge--cost" data-from="role1" data-to="ds2" marker-end="url(#arrow-sec)" x1="455" y1="132" x2="988" y2="368"></line>
+        </g>
+
+        <!-- resources -->
+        <g class="node" data-id="r1" data-node-key="Resource:i-checkout-api-1" data-status="included">
+          <rect x="10" y="90" width="190" height="56" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
+          <text class="label" x="105" y="111" text-anchor="middle">i-checkout-api-1</text>
+          <text class="sub mono" x="105" y="125" text-anchor="middle">Resource · ec2_instance</text>
+          <text class="sub mono" x="105" y="139" text-anchor="middle">internet-facing · CVSS 9.4</text>
+          <text class="why" x="105" y="162" text-anchor="middle"></text>
+          <text class="badge mono" x="105" y="162" text-anchor="middle" fill="var(--danger)"></text>
+          <title>Resource · i-checkout-api-1 · internet_facing true · max_severity 94</title>
+        </g>
+
+        <g class="node" data-id="r2" data-node-key="Resource:i-checkout-api-2" data-status="excluded">
+          <rect x="10" y="222" width="190" height="56" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
+          <text class="label" x="105" y="243" text-anchor="middle">i-checkout-api-2</text>
+          <text class="sub mono" x="105" y="257" text-anchor="middle">Resource · ec2_instance</text>
+          <text class="sub mono" x="105" y="271" text-anchor="middle">internal only · CVSS 9.4</text>
+          <text class="why" x="105" y="294" text-anchor="middle"></text>
+          <text class="badge mono" x="105" y="294" text-anchor="middle" fill="var(--danger)"></text>
+          <title>Resource · i-checkout-api-2 · same CVE and same role as -1, but internet_facing false</title>
+        </g>
+
+        <g class="node" data-id="r3" data-node-key="Resource:rds-orders-db" data-status="excluded">
+          <rect x="10" y="352" width="190" height="56" rx="8" fill="var(--node-rds)" stroke="var(--node-rds)"></rect>
+          <text class="label" x="105" y="373" text-anchor="middle">rds-orders-db</text>
+          <text class="sub mono" x="105" y="387" text-anchor="middle">Resource · rds_instance</text>
+          <text class="sub mono" x="105" y="401" text-anchor="middle">internet-facing · CVSS 2.1</text>
+          <text class="why" x="105" y="424" text-anchor="middle"></text>
+          <text class="badge mono" x="105" y="424" text-anchor="middle" fill="var(--danger)"></text>
+          <title>Resource · rds-orders-db · exposed, but its role reaches nothing classified</title>
+        </g>
+
+        <!-- IAM roles -->
+        <g class="node" data-id="role1" data-node-key="IAMRole:role-checkout-api" data-status="included">
+          <rect x="275" y="95" width="180" height="46" rx="8" fill="var(--node-role)" stroke="var(--node-role)"></rect>
+          <text class="label" x="365" y="114" text-anchor="middle">role-checkout-api</text>
+          <text class="sub mono" x="365" y="128" text-anchor="middle">IAMRole · not admin</text>
+          <text class="why" x="365" y="157" text-anchor="middle"></text>
+          <text class="badge mono" x="365" y="157" text-anchor="middle" fill="var(--danger)"></text>
+          <title>IAMRole · role-checkout-api · is_admin false — harmless on its own</title>
+        </g>
+
+        <g class="node" data-id="role2" data-node-key="IAMRole:role-deploy" data-status="excluded">
+          <rect x="520" y="95" width="170" height="46" rx="8" fill="var(--node-role)" stroke="var(--node-role)"></rect>
+          <text class="label" x="605" y="114" text-anchor="middle">role-deploy</text>
+          <text class="sub mono" x="605" y="128" text-anchor="middle">IAMRole · not admin</text>
+          <text class="why" x="605" y="157" text-anchor="middle"></text>
+          <text class="badge mono" x="605" y="157" text-anchor="middle" fill="var(--danger)"></text>
+          <title>IAMRole · role-deploy · the middle hop of the CAN_ASSUME chain</title>
+        </g>
+
+        <g class="node" data-id="role3" data-node-key="IAMRole:role-data-admin" data-status="included">
+          <rect x="750" y="95" width="180" height="46" rx="8" fill="var(--node-role)" stroke="var(--node-role)"></rect>
+          <text class="label" x="840" y="114" text-anchor="middle">role-data-admin</text>
+          <text class="sub mono" x="840" y="128" text-anchor="middle">IAMRole · admin</text>
+          <text class="why" x="840" y="157" text-anchor="middle"></text>
+          <text class="badge mono" x="840" y="157" text-anchor="middle" fill="var(--danger)"></text>
+          <title>IAMRole · role-data-admin · is_admin true · can read the PII store</title>
+        </g>
+
+        <g class="node" data-id="role4" data-node-key="IAMRole:role-rds-monitor" data-status="excluded">
+          <rect x="275" y="357" width="180" height="46" rx="8" fill="var(--node-role)" stroke="var(--node-role)"></rect>
+          <text class="label" x="365" y="376" text-anchor="middle">role-rds-monitor</text>
+          <text class="sub mono" x="365" y="390" text-anchor="middle">IAMRole · not admin</text>
+          <text class="why" x="365" y="419" text-anchor="middle"></text>
+          <text class="badge mono" x="365" y="419" text-anchor="middle" fill="var(--danger)"></text>
+          <title>IAMRole · role-rds-monitor · assumes nothing, reads only ops logs</title>
+        </g>
+
+        <!-- data stores -->
+        <g class="node" data-id="ds1" data-node-key="DataStore:s3-customer-exports" data-status="included">
+          <rect x="990" y="93" width="180" height="50" rx="8" fill="var(--node-store)" stroke="var(--danger)" stroke-width="2.5"></rect>
+          <text class="label" x="1080" y="113" text-anchor="middle">s3-customer-exports</text>
+          <text class="sub mono" x="1080" y="129" text-anchor="middle">DataStore · pii</text>
+          <text class="why" x="1080" y="159" text-anchor="middle"></text>
+          <text class="badge mono" x="1080" y="159" text-anchor="middle" fill="var(--danger)"></text>
+          <title>DataStore · s3-customer-exports · classification pii — the crown jewels, and the query's anchor</title>
+        </g>
+
+        <g class="node" data-id="ds2" data-node-key="DataStore:s3-ops-logs" data-status="excluded">
+          <rect x="990" y="355" width="180" height="50" rx="8" fill="var(--node-store)" stroke="var(--node-store)"></rect>
+          <text class="label" x="1080" y="375" text-anchor="middle">s3-ops-logs</text>
+          <text class="sub mono" x="1080" y="391" text-anchor="middle">DataStore · internal</text>
+          <text class="why" x="1080" y="421" text-anchor="middle"></text>
+          <text class="badge mono" x="1080" y="421" text-anchor="middle" fill="var(--danger)"></text>
+          <title>DataStore · s3-ops-logs · classification internal — reachable, but not what the query anchors on</title>
+        </g>
+      </svg>
+      <figcaption style="padding: 4px 4px 16px; font-size: 12px; color: var(--ink-faint);">
+        Solid arrows: <code class="mono">RUNS_AS</code> / <code class="mono">CAN_ASSUME</code> (who can become whom). Dashed lines: <code class="mono">CAN_READ</code>, joining a role to the data it can reach. Hover any node for its properties.
+      </figcaption>
+    </div>
+    <div class="card panel">
+      <h2>The three decoys</h2>
+      <div class="pipeline">
+        <div class="pipeline-step"><span class="cmd mono">i-checkout-api-2</span><span>same CVE, same role — but not internet-facing. Rejected by <code class="mono">WHERE</code>.</span></div>
+        <div class="pipeline-step"><span class="cmd mono">rds-orders-db</span><span>exposed, yet its role assumes nothing and reads only ops logs. The pattern never reaches it.</span></div>
+        <div class="pipeline-step"><span class="cmd mono">role-checkout-api</span><span>holds a <code class="mono">CAN_READ</code> edge of its own — to a store that isn't classified. Having the edge is not the finding; where the chain <em>ends</em> is.</span></div>
+      </div>
+      <p class="empty-hint" style="margin-top:10px;">Each is a finding a rule-per-resource scanner would raise. Only the path tells them apart.</p>
+    </div>
+    </div>
 
     <div class="side">
       <div class="card panel">
@@ -574,54 +860,34 @@
           <h2>Query</h2>
           <span class="panel-head-hint">edit &amp; run</span>
         </div>
-        <textarea id="query-input" class="query-editor mono" spellcheck="false" autocomplete="off" rows="7">MATCH (a:CloudAccount {account_id: "123456789012"})
-  -[:OWNS]-> (vpc:Resource)
-  -[:CONTAINS*1..3]-> (r:Resource)
-  -[:HAS_COST]-> (c:CostRecord)
-WHERE c.amount_usd > 100
-RETURN r, c</textarea>
+        <textarea data-role="query-input" class="query-editor mono" spellcheck="false" autocomplete="off" rows="12">MATCH (d:DataStore {classification: "pii"})
+  &lt;-[:CAN_READ]- (admin:IAMRole)
+  &lt;-[:CAN_ASSUME*1..3]- (entry:IAMRole)
+  &lt;-[:RUNS_AS]- (r:Resource)
+WHERE r.internet_facing = true AND r.max_severity &gt;= 90
+RETURN r, entry, admin, d</textarea>
         <div class="query-actions">
-          <button type="button" id="btn-run" class="btn btn-primary">Run query</button>
-          <button type="button" id="btn-reset" class="btn btn-ghost">Reset</button>
+          <button type="button" data-role="btn-run" class="btn btn-primary">Run query</button>
+          <button type="button" data-role="btn-reset" class="btn btn-ghost">Reset</button>
         </div>
-        <p class="query-error" id="query-error" role="alert" hidden></p>
-        <p class="empty-hint" id="query-status" style="margin-top:10px;">
-          Sent as-is to <code class="mono">POST /api/query</code>, parsed and executed by the
-          real <code class="mono">graph-coordinator</code>. Include both <code class="mono">r</code>
-          and <code class="mono">c</code> in <code class="mono">RETURN</code> to see resource name
-          and cost together.
-        </p>
+        <p class="query-error" data-role="query-error" role="alert" hidden></p>
+        <p class="empty-hint" data-role="query-status" style="margin-top:10px;">Three real round trips: your query, the same pattern without its <code class="mono">WHERE</code> (to tell &ldquo;filtered out&rdquo; from &ldquo;never reached&rdquo;), and the role-reachability chain. All parsed and executed by <code class="mono">graph-coordinator</code>.</p>
       </div>
 
-      <div class="card panel" id="results-panel">
-        <h2 id="results-title">Dataset</h2>
-        <div id="results-body"></div>
+      <div class="card panel">
+        <h2 data-role="results-title">Dataset</h2>
+        <div data-role="results-body"></div>
       </div>
 
       <div class="card panel">
         <h2>Node types</h2>
-        <div class="legend">
-          <div class="legend-row"><span class="swatch" style="background:var(--node-account)"></span><span class="name">CloudAccount</span></div>
-          <div class="legend-row"><span class="swatch" style="background:var(--node-vpc)"></span><span class="name">Resource · vpc / subnet</span></div>
-          <div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance</span></div>
-          <div class="legend-row"><span class="swatch" style="background:var(--node-storage)"></span><span class="name">Resource · ebs_volume / snapshot</span></div>
-          <div class="legend-row"><span class="swatch" style="background:var(--node-rds)"></span><span class="name">Resource · rds_instance</span></div>
-          <div class="legend-row"><span class="swatch" style="background:var(--node-cost); border:1.5px solid var(--accent-cost)"></span><span class="name">CostRecord</span></div>
-        </div>
-        <p class="empty-hint" style="margin-top:10px;">Color shows the <code class="mono">resource_type</code> property — the schema itself only has three node labels: CloudAccount, Resource, CostRecord.</p>
-      </div>
-
-      <div class="card panel">
-        <h2>Pipeline</h2>
-        <div class="pipeline">
-          <div class="pipeline-step"><span class="cmd mono">ingest-cloud-cost</span> writes this dataset into a persistent Iceberg catalog.</div>
-          <div class="pipeline-step"><span class="cmd mono">graph-partition-node</span> builds the CSR + property index from it.</div>
-          <div class="pipeline-step"><span class="cmd mono">graph-coordinator</span> plans and executes the query above over gRPC.</div>
-          <div class="pipeline-step"><span class="cmd mono">query-client</span> streams back the matching nodes.</div>
-        </div>
+        <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-rds)"></span><span class="name">Resource · rds_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-role)"></span><span class="name">IAMRole</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store); border:1.5px solid var(--danger)"></span><span class="name">DataStore · pii</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store)"></span><span class="name">DataStore · internal</span></div><div class="legend-row"><span class="swatch" style="background:transparent; border:2px dashed var(--node-traversed)"></span><span class="name">traversed, not projected</span></div></div>
+        <p class="empty-hint" style="margin-top:10px;"><code class="mono">Resource</code> is the same label the cost tab traverses — one inventory, joined to a second scanner feed by an edge rather than by a runtime join.</p>
       </div>
     </div>
-  </div>
+
+    </div>
+  </section>
 
   <footer class="page">
     <span>Rust · Apache Iceberg · custom traversal DSL</span>
@@ -631,19 +897,39 @@ RETURN r, c</textarea>
 
 <script>
 (function () {
-  // The only thing this page still knows about the dataset: which of the
-  // diagram's pre-drawn SVG nodes a returned `Resource.name` corresponds
-  // to. Everything about *which* resources match a query — traversal,
-  // hop range, the WHERE filter — is decided server-side by the real
-  // graph-coordinator via POST /api/query, not here.
-  var KNOWN_RESOURCES = [
-    { svgId: 'subnet', name: 'subnet-prod-a' },
-    { svgId: 'rds', name: 'rds-orders-db' },
-    { svgId: 'i1', name: 'i-checkout-api-1' },
-    { svgId: 'i2', name: 'i-checkout-api-2' },
-    { svgId: 'vol', name: 'vol-checkout-api-1' },
-    { svgId: 'snap', name: 'snap-checkout-api-1' }
-  ];
+  // What this page knows about the dataset: which pre-drawn SVG box each
+  // node the coordinator can return corresponds to, keyed by
+  // "<label>:<identity property>". That mapping is all — *which* nodes a
+  // query matches, how far the traversal reaches, and what the WHERE
+  // clause rejects are all decided server-side by the real
+  // graph-coordinator over POST /api/query. No traversal runs here.
+
+  var IDENTITY_PROPS = ['name', 'role_name', 'account_id'];
+
+  function identityOf(node) {
+    if (!node || !node.properties) return null;
+    for (var i = 0; i < IDENTITY_PROPS.length; i++) {
+      var v = node.properties[IDENTITY_PROPS[i]];
+      if (v !== undefined && v !== null) return v;
+    }
+    return null;
+  }
+
+  function nodeKey(node) {
+    var id = identityOf(node);
+    return node && node.label && id !== null ? node.label + ':' + id : null;
+  }
+
+  function keySet(rows) {
+    var set = {};
+    (rows || []).forEach(function (row) {
+      for (var alias in row) {
+        var k = nodeKey(row[alias]);
+        if (k) set[k] = true;
+      }
+    });
+    return set;
+  }
 
   async function postQuery(dsl) {
     var res = await fetch('/api/query', {
@@ -658,215 +944,324 @@ RETURN r, c</textarea>
     return body.rows || [];
   }
 
-  function findByLabel(row, label) {
-    for (var alias in row) {
-      if (row[alias] && row[alias].label === label) return row[alias];
-    }
-    return null;
+  /// The same pattern with its WHERE clause removed — a second real
+  /// query, run by the real coordinator, used only to tell "the pattern
+  /// reached this node but WHERE rejected it" apart from "the pattern
+  /// never reached it at all". Returns null when there's no WHERE to
+  /// drop, in which case that distinction is simply not drawn.
+  function withoutWhere(text) {
+    var m = text.match(/^([\s\S]*?)\bWHERE\b[\s\S]*?(\bRETURN\b[\s\S]*)$/);
+    return m ? m[1] + m[2] : null;
   }
 
-  function indexRowsByResourceName(rows) {
-    var byName = {};
-    rows.forEach(function (row) {
-      var resource = findByLabel(row, 'Resource');
-      if (!resource || !resource.properties || !resource.properties.name) return;
-      byName[resource.properties.name] = {
-        resource: resource,
-        cost: findByLabel(row, 'CostRecord')
-      };
+  function costAmounts(rows) {
+    var byResource = {};
+    (rows || []).forEach(function (row) {
+      var resource = null, cost = null;
+      for (var alias in row) {
+        if (row[alias] && row[alias].label === 'Resource') resource = row[alias];
+        if (row[alias] && row[alias].label === 'CostRecord') cost = row[alias];
+      }
+      var key = nodeKey(resource);
+      if (key) {
+        byResource[key] = cost && cost.properties ? cost.properties.amount_usd : null;
+      }
     });
-    return byName;
+    return byResource;
   }
 
-  /// Best-effort variant of the typed query with its WHERE amount_usd
-  /// comparison loosened to always-true — used only to distinguish, in
-  /// the "excluded, and why" panel, "reached but filtered by WHERE" from
-  /// "never reached by the pattern at all". Still a real second query
-  /// executed by the real coordinator, not a client-side guess; returns
-  /// null when the text doesn't have a WHERE c.amount_usd clause to
-  /// loosen (nothing to compare against, so the distinction is skipped).
-  function looseningWhereVariant(text) {
-    var loosened = text.replace(
-      /WHERE\s+c\.amount_usd\s*(>=|<=|==|>|<|=)\s*-?\d+(\.\d+)?/,
-      'WHERE c.amount_usd > -1'
-    );
-    return loosened === text ? null : loosened;
+  var USE_CASES = {
+    cost: {
+      id: 'cost',
+      // Only the resources carry a query-dependent state; the account and
+      // vpc are context, and CostRecord boxes are lit through their edge.
+      known: [
+        { svgId: 'subnet', key: 'Resource:subnet-prod-a', name: 'subnet-prod-a' },
+        { svgId: 'rds', key: 'Resource:rds-orders-db', name: 'rds-orders-db' },
+        { svgId: 'i1', key: 'Resource:i-checkout-api-1', name: 'i-checkout-api-1' },
+        { svgId: 'i2', key: 'Resource:i-checkout-api-2', name: 'i-checkout-api-2' },
+        { svgId: 'vol', key: 'Resource:vol-checkout-api-1', name: 'vol-checkout-api-1' },
+        { svgId: 'snap', key: 'Resource:snap-checkout-api-1', name: 'snap-checkout-api-1' }
+      ],
+      edgeRule: 'target',
+      pathQuery: null,
+      fullStats: [
+        ['Nodes in this lens', '14'],
+        ['Edges in this lens', '13'],
+        ['Labels', 'CloudAccount, Resource, CostRecord'],
+        ['Whole dataset', '20 nodes · 21 edges']
+      ],
+      badgeFor: function (known, ctx) {
+        var amount = ctx.amounts[known.key];
+        return (amount != null ? '$' + amount + '/mo' : '') + ' · kept';
+      },
+      renderResults: function (statuses, ctx, els) {
+        var included = statuses.filter(function (s) { return s.status === 'included'; });
+        var excluded = statuses.filter(function (s) { return s.status !== 'included'; });
+        els.title.textContent = 'Result — ' + included.length + ' row' + (included.length === 1 ? '' : 's');
+        var html;
+        if (included.length) {
+          html = '<ul class="result-list">' + included.map(function (s) {
+            var amount = ctx.amounts[s.key];
+            return '<li><span>' + s.name + '</span><span class="amt mono">' +
+              (amount != null ? '$' + amount + '/mo' : '—') + '</span></li>';
+          }).join('') + '</ul>';
+        } else {
+          html = '<p class="empty-hint">No resources matched this query.</p>';
+        }
+        html += excludedList(excluded);
+        els.body.innerHTML = html;
+      }
+    },
+
+    security: {
+      id: 'security',
+      known: [
+        { svgId: 'r1', key: 'Resource:i-checkout-api-1', name: 'i-checkout-api-1' },
+        { svgId: 'r2', key: 'Resource:i-checkout-api-2', name: 'i-checkout-api-2' },
+        { svgId: 'r3', key: 'Resource:rds-orders-db', name: 'rds-orders-db' },
+        { svgId: 'role1', key: 'IAMRole:role-checkout-api', name: 'role-checkout-api' },
+        { svgId: 'role2', key: 'IAMRole:role-deploy', name: 'role-deploy' },
+        { svgId: 'role3', key: 'IAMRole:role-data-admin', name: 'role-data-admin' },
+        { svgId: 'role4', key: 'IAMRole:role-rds-monitor', name: 'role-rds-monitor' },
+        { svgId: 'ds1', key: 'DataStore:s3-customer-exports', name: 's3-customer-exports' },
+        { svgId: 'ds2', key: 'DataStore:s3-ops-logs', name: 's3-ops-logs' }
+      ],
+      edgeRule: 'endpoints',
+      // A third real query, independent of the WHERE clause: which roles
+      // can reach a PII store within three assume-hops at all. It exists
+      // because `RETURN` only *projects* — the middle hop of a `*1..3`
+      // range binds no returned alias in the full pattern, so without
+      // this the pivot role would be drawn as "never reached" even
+      // though the traversal walked straight through it.
+      pathQuery: 'MATCH (d:DataStore {classification: "pii"})<-[:CAN_READ]-(admin:IAMRole)<-[:CAN_ASSUME*1..3]-(entry:IAMRole)\nRETURN entry, admin, d',
+      pathAliases: ['r', 'entry', 'admin', 'd'],
+      fullStats: [
+        ['Nodes in this lens', '9'],
+        ['Edges in this lens', '8'],
+        ['Labels', 'Resource, IAMRole, DataStore'],
+        ['Whole dataset', '20 nodes · 21 edges']
+      ],
+      badgeFor: function () { return 'on attack path'; },
+      renderResults: function (statuses, ctx, els) {
+        var rows = ctx.primaryRows;
+        els.title.textContent = 'Result — ' + rows.length + ' attack path' + (rows.length === 1 ? '' : 's');
+        var uc = USE_CASES.security;
+        var html;
+        if (rows.length) {
+          html = '<ul class="result-list">' + rows.map(function (row) {
+            var seen = {}, parts = [];
+            uc.pathAliases.forEach(function (a) {
+              if (row[a]) { parts.push(identityOf(row[a])); seen[a] = true; }
+            });
+            for (var alias in row) {
+              if (!seen[alias]) parts.push(identityOf(row[alias]));
+            }
+            return '<li style="flex-direction:column; align-items:stretch; gap:4px;">' +
+              '<span class="mono" style="font-size:11.5px; color:var(--danger);">exploitable chain</span>' +
+              '<span style="font-size:12.5px; line-height:1.7;">' +
+              parts.join(' <span style="color:var(--ink-faint)">&rarr;</span> ') + '</span></li>';
+          }).join('') + '</ul>';
+        } else {
+          html = '<p class="empty-hint">No exploitable path matched this query.</p>';
+        }
+        html += excludedList(statuses.filter(function (s) { return s.status !== 'included'; }));
+        els.body.innerHTML = html;
+      }
+    }
+  };
+
+  function excludedList(excluded) {
+    if (!excluded.length) return '';
+    return '<p class="empty-hint" style="margin-top:12px; margin-bottom:6px;">Excluded, and why:</p>' +
+      '<ul class="result-list">' + excluded.map(function (s) {
+        return '<li style="border-left-color: var(--excluded-stroke);"><span>' + s.name +
+          '</span><span class="mono" style="color:var(--ink-faint); font-size:11.5px;">' +
+          s.reason + '</span></li>';
+      }).join('') + '</ul>';
   }
 
-  function applyToSvg(statuses) {
-    var bySvgId = {};
-    statuses.forEach(function (s) { bySvgId[s.svgId] = s; });
+  function computeStatuses(uc, ctx) {
+    var primary = keySet(ctx.primaryRows);
+    var reached = keySet(ctx.reachRows);
+    var onPath = keySet(ctx.pathRows);
+
+    return uc.known.map(function (known) {
+      var base = { svgId: known.svgId, key: known.key, name: known.name };
+      if (primary[known.key]) {
+        base.status = 'included';
+        base.badge = uc.badgeFor(known, ctx);
+      } else if (onPath[known.key]) {
+        base.status = 'traversed';
+        base.reason = 'traversed, not projected';
+      } else if (reached[known.key]) {
+        base.status = 'excluded';
+        base.reason = 'reached — filtered out by WHERE';
+      } else {
+        base.status = 'excluded';
+        base.reason = ctx.reachRows ? 'not reached by this pattern' : 'not returned by this query';
+      }
+      base.reached = base.status !== 'excluded' || !!reached[known.key];
+      return base;
+    });
+  }
+
+  function applyToSvg(section, uc, statuses) {
+    var byId = {};
+    statuses.forEach(function (s) { byId[s.svgId] = s; });
 
     statuses.forEach(function (s) {
-      var node = document.querySelector('.node[data-id="' + s.svgId + '"]');
+      var node = section.querySelector('.node[data-id="' + s.svgId + '"]');
       if (!node) return;
-      node.setAttribute('data-status', s.included ? 'included' : 'excluded');
+      node.setAttribute('data-status', s.status);
       var badge = node.querySelector('.badge');
       var why = node.querySelector('.why');
-      if (badge) badge.textContent = s.included ? s.badgeText : '';
-      if (why) why.textContent = s.included ? '' : s.reason;
+      if (badge) badge.textContent = s.status === 'included' ? (s.badge || '') : '';
+      if (why) why.textContent = s.status === 'included' ? '' : (s.reason || '');
 
-      var costEdge = document.querySelector('.edge--cost[data-id="' + s.svgId + '"]');
-      if (costEdge) costEdge.setAttribute('data-result', s.included ? 'included' : 'excluded');
+      var costEdge = section.querySelector('.edge--cost[data-id="' + s.svgId + '"]');
+      if (costEdge) costEdge.setAttribute('data-result', s.status === 'included' ? 'included' : 'excluded');
     });
 
-    // Each structural edge's data-id names the resource it leads to
-    // (hop 0, account->vpc, has none and is always on the path). Lit up
-    // iff that resource was reached by the pattern, per computeStatuses.
-    document.querySelectorAll('.edge[data-hop]').forEach(function (edge) {
-      var target = edge.getAttribute('data-id');
-      var status = target && bySvgId[target];
-      var inRange = !target || (status && status.reachedPattern);
-      edge.classList.toggle('edge--in-range', inRange);
-      edge.classList.toggle('edge--out-of-range', !inRange);
-    });
-  }
-
-  function computeStatuses(actualRows, reachableRows) {
-    var actualByName = indexRowsByResourceName(actualRows);
-    var reachableByName = reachableRows ? indexRowsByResourceName(reachableRows) : null;
-
-    return KNOWN_RESOURCES.map(function (known) {
-      var hit = actualByName[known.name];
-      if (hit) {
-        var amount = hit.cost && hit.cost.properties && hit.cost.properties.amount_usd;
-        return {
-          svgId: known.svgId,
-          name: known.name,
-          included: true,
-          reachedPattern: true,
-          badgeText: (amount != null ? '$' + amount + '/mo' : '') + ' · kept',
-          amount: amount
-        };
-      }
-
-      if (reachableByName) {
-        var reached = reachableByName[known.name];
-        if (reached) {
-          var reachedAmount = reached.cost && reached.cost.properties && reached.cost.properties.amount_usd;
-          return {
-            svgId: known.svgId,
-            name: known.name,
-            included: false,
-            reachedPattern: true,
-            reason: (reachedAmount != null ? '$' + reachedAmount + '/mo' : 'value') + ' — filtered out by WHERE'
-          };
-        }
-        return {
-          svgId: known.svgId,
-          name: known.name,
-          included: false,
-          reachedPattern: false,
-          reason: 'not reached by this query’s pattern'
-        };
-      }
-
-      return {
-        svgId: known.svgId,
-        name: known.name,
-        included: false,
-        reachedPattern: false,
-        reason: 'not returned by this query'
+    if (uc.edgeRule === 'endpoints') {
+      // Both ends must be on the traversal. That's what keeps the edge
+      // from an excluded resource to an included role dark, even though
+      // the role itself is part of the finding.
+      var walked = function (id) {
+        var s = byId[id];
+        return !!s && (s.status === 'included' || s.status === 'traversed');
       };
-    });
+      section.querySelectorAll('.edge[data-from][data-to]').forEach(function (edge) {
+        var lit = walked(edge.getAttribute('data-from')) && walked(edge.getAttribute('data-to'));
+        edge.classList.toggle('edge--in-range', lit);
+        edge.classList.toggle('edge--out-of-range', !lit);
+      });
+    } else {
+      // Each structural edge's data-id names the resource it leads to
+      // (hop 0, account->vpc, has none and is always on the path).
+      section.querySelectorAll('.edge[data-hop]').forEach(function (edge) {
+        var target = edge.getAttribute('data-id');
+        var status = target && byId[target];
+        var inRange = !target || (status && status.reached);
+        edge.classList.toggle('edge--in-range', inRange);
+        edge.classList.toggle('edge--out-of-range', !inRange);
+      });
+    }
   }
 
-  function renderFull() {
-    document.getElementById('results-title').textContent = 'Dataset';
-    var rows = [
-      ['Node labels', '3'],
-      ['Edge types', '3'],
-      ['Nodes', '14'],
-      ['Edges', '13']
-    ];
-    document.getElementById('results-body').innerHTML =
-      rows.map(function (r) {
+  function wireUp(uc) {
+    var section = document.querySelector('.usecase[data-usecase="' + uc.id + '"]');
+    var el = function (role) { return section.querySelector('[data-role="' + role + '"]'); };
+    var els = {
+      full: el('btn-full'), query: el('btn-query'), run: el('btn-run'), reset: el('btn-reset'),
+      input: el('query-input'), error: el('query-error'), status: el('query-status'),
+      title: el('results-title'), body: el('results-body')
+    };
+    var defaultQueryText = els.input.value;
+    var last = null;
+
+    function renderFull() {
+      els.title.textContent = 'Dataset';
+      els.body.innerHTML = uc.fullStats.map(function (r) {
         return '<div class="stat-row"><span>' + r[0] + '</span><span class="n mono">' + r[1] + '</span></div>';
       }).join('') +
-      '<p class="empty-hint" style="margin-top:10px;">Switch to “query result”, or run the query on the right, to hit the live coordinator.</p>';
-  }
-
-  function renderQuery(statuses) {
-    var included = statuses.filter(function (s) { return s.included; });
-    var excluded = statuses.filter(function (s) { return !s.included; });
-
-    document.getElementById('results-title').textContent = 'Result — ' + included.length + ' row' + (included.length === 1 ? '' : 's');
-    var html;
-    if (included.length) {
-      html = '<ul class="result-list">' + included.map(function (s) {
-        return '<li><span>' + s.name + '</span><span class="amt mono">' + (s.amount != null ? '$' + s.amount + '/mo' : '—') + '</span></li>';
-      }).join('') + '</ul>';
-    } else {
-      html = '<p class="empty-hint">No resources matched this query.</p>';
+        '<p class="empty-hint" style="margin-top:10px;">Switch to &ldquo;query result&rdquo;, or run the query on the right, to hit the live coordinator.</p>';
     }
-    if (excluded.length) {
-      html += '<p class="empty-hint" style="margin-top:12px; margin-bottom:6px;">Excluded, and why:</p>';
-      html += '<ul class="result-list">' + excluded.map(function (s) {
-        return '<li style="border-left-color: var(--excluded-stroke);"><span>' + s.name + '</span><span class="mono" style="color:var(--ink-faint); font-size:11.5px;">' + s.reason + '</span></li>';
-      }).join('') + '</ul>';
+
+    function setMode(queryMode) {
+      section.classList.toggle('mode-query', queryMode);
+      els.full.setAttribute('aria-pressed', String(!queryMode));
+      els.query.setAttribute('aria-pressed', String(queryMode));
+      if (queryMode && last) uc.renderResults(last.statuses, last.ctx, els);
+      else if (!queryMode) renderFull();
     }
-    document.getElementById('results-body').innerHTML = html;
-  }
 
-  var btnFull = document.getElementById('btn-full');
-  var btnQuery = document.getElementById('btn-query');
-  var btnRun = document.getElementById('btn-run');
-  var btnReset = document.getElementById('btn-reset');
-  var input = document.getElementById('query-input');
-  var errorBox = document.getElementById('query-error');
-  var statusLine = document.getElementById('query-status');
-  var defaultQueryText = input.value;
-  var lastStatuses = null;
+    async function runQuery(switchToQueryMode) {
+      els.run.disabled = true;
+      els.run.textContent = 'Running…';
+      try {
+        var dsl = els.input.value;
+        var ctx = { primaryRows: await postQuery(dsl), reachRows: null, pathRows: null };
 
-  function setMode(query) {
-    document.body.classList.toggle('mode-query', query);
-    btnFull.setAttribute('aria-pressed', String(!query));
-    btnQuery.setAttribute('aria-pressed', String(query));
-    if (query && lastStatuses) renderQuery(lastStatuses); else if (!query) renderFull();
-  }
-
-  async function runQuery(switchToQueryMode) {
-    var dsl = input.value;
-    btnRun.disabled = true;
-    btnRun.textContent = 'Running…';
-    var startedAt = Date.now ? Date.now() : 0;
-    try {
-      var actualRows = await postQuery(dsl);
-      var reachableRows = null;
-      var variant = looseningWhereVariant(dsl);
-      if (variant) {
-        try {
-          reachableRows = await postQuery(variant);
-        } catch (e) {
-          reachableRows = null; // best-effort only — the primary result still stands.
+        // Best-effort context queries: the primary result stands on its
+        // own if either of these fails.
+        var relaxed = withoutWhere(dsl);
+        if (relaxed) {
+          try { ctx.reachRows = await postQuery(relaxed); } catch (e) { ctx.reachRows = null; }
         }
+        if (uc.pathQuery) {
+          try { ctx.pathRows = await postQuery(uc.pathQuery); } catch (e) { ctx.pathRows = null; }
+        }
+        ctx.amounts = costAmounts(ctx.primaryRows);
+
+        els.error.hidden = true;
+        var statuses = computeStatuses(uc, ctx);
+        last = { statuses: statuses, ctx: ctx };
+        applyToSvg(section, uc, statuses);
+        els.status.textContent = ctx.primaryRows.length + ' row' +
+          (ctx.primaryRows.length === 1 ? '' : 's') + ' back from the live coordinator just now.';
+        if (switchToQueryMode) setMode(true);
+        else if (section.classList.contains('mode-query')) uc.renderResults(statuses, ctx, els);
+      } catch (err) {
+        els.error.textContent = err.message;
+        els.error.hidden = false;
+      } finally {
+        els.run.disabled = false;
+        els.run.textContent = 'Run query';
       }
-      errorBox.hidden = true;
-      lastStatuses = computeStatuses(actualRows, reachableRows);
-      applyToSvg(lastStatuses);
-      statusLine.textContent = actualRows.length + ' row' + (actualRows.length === 1 ? '' : 's') +
-        ' back from the live coordinator just now.';
-      if (switchToQueryMode) setMode(true);
-      else if (document.body.classList.contains('mode-query')) renderQuery(lastStatuses);
-    } catch (err) {
-      errorBox.textContent = err.message;
-      errorBox.hidden = false;
-    } finally {
-      btnRun.disabled = false;
-      btnRun.textContent = 'Run query';
     }
+
+    els.full.addEventListener('click', function () { setMode(false); });
+    els.query.addEventListener('click', function () {
+      if (last) setMode(true); else runQuery(true);
+    });
+    els.run.addEventListener('click', function () { runQuery(true); });
+    els.reset.addEventListener('click', function () {
+      els.input.value = defaultQueryText;
+      runQuery(true);
+    });
+
+    renderFull();
   }
 
-  btnFull.addEventListener('click', function () { setMode(false); });
-  btnQuery.addEventListener('click', function () {
-    if (lastStatuses) setMode(true); else runQuery(true);
-  });
-  btnRun.addEventListener('click', function () { runQuery(true); });
-  btnReset.addEventListener('click', function () {
-    input.value = defaultQueryText;
-    runQuery(true);
+  Object.keys(USE_CASES).forEach(function (id) { wireUp(USE_CASES[id]); });
+
+  // ---- tab switching ----
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.tabs button'));
+  var panels = Array.prototype.slice.call(document.querySelectorAll('.usecase'));
+
+  function selectTab(id) {
+    tabs.forEach(function (t) {
+      t.setAttribute('aria-selected', String(t.getAttribute('data-tab') === id));
+      t.tabIndex = t.getAttribute('data-tab') === id ? 0 : -1;
+    });
+    panels.forEach(function (p) { p.hidden = p.getAttribute('data-usecase') !== id; });
+    if (location.hash.slice(1) !== id) history.replaceState(null, '', '#' + id);
+  }
+
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () { selectTab(t.getAttribute('data-tab')); });
+    t.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      e.preventDefault();
+      var i = tabs.indexOf(t) + (e.key === 'ArrowRight' ? 1 : -1);
+      var next = tabs[(i + tabs.length) % tabs.length];
+      selectTab(next.getAttribute('data-tab'));
+      next.focus();
+    });
   });
 
-  renderFull();
+  // Switching tabs only rewrites the fragment, so navigating between two
+  // tab URLs (back/forward, or a pasted link while the page is already
+  // open) is a same-document fragment change — no reload, no re-run of
+  // this script. Without this listener the URL would say one tab and the
+  // page would show another.
+  window.addEventListener('hashchange', function () {
+    var id = location.hash.slice(1);
+    if (Object.prototype.hasOwnProperty.call(USE_CASES, id)) selectTab(id);
+  });
+
+  var initial = location.hash.slice(1);
+  selectTab(Object.prototype.hasOwnProperty.call(USE_CASES, initial) ? initial : 'cost');
 })();
 </script>

@@ -1,1 +1,7 @@
 /target
+
+# Written by `cargo run -p ingest-cloud-cost` into the cwd: the Iceberg
+# warehouse (Parquet data + table metadata) and the SQLite catalog that
+# indexes it. Both are regenerated from scratch on every ingest run.
+/warehouse/
+/catalog.sqlite

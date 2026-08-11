@@ -1,3 +1,20 @@
+// One inventory, two lenses. `Resource` is deliberately shared between
+// both use cases the viewer exposes as tabs:
+//
+//   - FinOps    — CloudAccount -OWNS-> Resource -CONTAINS*-> Resource
+//                 -HAS_COST-> CostRecord
+//   - Security  — Resource -RUNS_AS-> IAMRole -CAN_ASSUME*-> IAMRole
+//                 -CAN_READ-> DataStore
+//
+// That sharing is the point: the same node the billing pipeline knows as
+// a line item is the one the security posture scanner knows as an
+// attack-path hop. Joining them is an edge in the graph, not a runtime
+// join between two systems.
+//
+// Properties filtered on in a `WHERE` must be `@indexed` — the executor
+// resolves filters through the property index (spec §5.2), which only
+// carries opt-in properties (`build_property_index`).
+
 schema graph_v1 {
   node CloudAccount {
     id: NodeId
@@ -10,12 +27,35 @@ schema graph_v1 {
     @indexed name: String
     resource_type: String
     region: String
+    // Security posture, scanned separately from the billing feed.
+    // `max_severity` is the worst CVSS score found on the resource,
+    // ×10 so it stays Int64 — the property index has no Float64
+    // PropertyKey variant (see `property_key`).
+    @indexed internet_facing: Bool
+    @indexed max_severity: Int64
   }
 
   node CostRecord {
     id: NodeId
     @indexed amount_usd: Int64
     period: String
+  }
+
+  node IAMRole {
+    id: NodeId
+    @indexed role_name: String
+    @indexed is_admin: Bool
+  }
+
+  node DataStore {
+    id: NodeId
+    @indexed name: String
+    // Anchors the attack-path query: v1's planner requires the start
+    // node to carry exactly one equality filter on an indexed property,
+    // so the traversal starts at the crown jewels and walks *backwards*
+    // to the internet-facing resource. That's the selective direction
+    // anyway — few PII stores, many exposed resources.
+    @indexed classification: String
   }
 
   edge OWNS {
@@ -31,5 +71,24 @@ schema graph_v1 {
   edge HAS_COST {
     from: Resource
     to: CostRecord
+  }
+
+  edge RUNS_AS {
+    from: Resource
+    to: IAMRole
+  }
+
+  // The pivot. Chained role assumption is what turns "a vulnerable box"
+  // into "a vulnerable box that can reach customer data" — and a
+  // bounded variable-length hop (`*1..3`) is exactly the engine's
+  // priority primitive (spec §7.1).
+  edge CAN_ASSUME {
+    from: IAMRole
+    to: IAMRole
+  }
+
+  edge CAN_READ {
+    from: IAMRole
+    to: DataStore
   }
 }

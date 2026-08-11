@@ -16,10 +16,52 @@ use iceberg::io::LocalFsStorageFactory;
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent};
 use iceberg_catalog_sql::{SqlBindStyle, SqlCatalog, SqlCatalogBuilder};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::StorageError;
+
+/// Resolves `path` to an absolute one *lexically* - without touching the
+/// filesystem, so it works for a warehouse directory that doesn't exist
+/// yet (the common case: nothing has been ingested, and Iceberg is about
+/// to create it).
+///
+/// `warehouse_location` is handed to Iceberg as a `file://` URI, and a
+/// relative path there becomes `file://./warehouse`, whose host-vs-path
+/// split resolves to `/./warehouse` - rooted at `/`, not at the current
+/// directory. That surfaces much later as a confusing "permission
+/// denied" from deep inside a table write, so normalise up front.
+///
+/// `std::fs::canonicalize` would do this and resolve symlinks too, but
+/// it errors on a path that doesn't exist yet; `std::path::absolute` is
+/// exactly this function, stabilised in 1.79 - past this workspace's
+/// declared `rust-version = "1.75"`.
+fn absolute_warehouse(path: &Path) -> Result<PathBuf, StorageError> {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| {
+                StorageError::Backend(format!(
+                    "cannot resolve relative warehouse path {}: {e}",
+                    path.display()
+                ))
+            })?
+            .join(path)
+    };
+
+    // Drop the no-op `.` components a path like `./warehouse` carries;
+    // `..` is left alone, since resolving it lexically would be wrong in
+    // the presence of symlinks.
+    let mut out = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    Ok(out)
+}
 
 /// Opens (creating on first use) a SQLite-backed Iceberg catalog rooted
 /// at `warehouse_path` on the local filesystem, and ensures `namespace`
@@ -30,8 +72,7 @@ pub async fn open_sql_catalog(
     warehouse_path: &Path,
     namespace: &str,
 ) -> Result<SqlCatalog, StorageError> {
-    let abs_warehouse = std::fs::canonicalize(warehouse_path)
-        .map_err(|e| StorageError::Backend(format!("Failed to canonicalize warehouse path: {e}")))?;
+    let abs_warehouse = absolute_warehouse(warehouse_path)?;
     let catalog = SqlCatalogBuilder::default()
         .uri(format!("sqlite://{}?mode=rwc", sqlite_path.display()))
         .warehouse_location(format!("file://{}", abs_warehouse.display()))
@@ -67,6 +108,39 @@ mod tests {
     /// same SQLite file must see the same tables. `MemoryCatalog` fails
     /// this by construction - its registry never leaves the process that
     /// created it.
+    /// A relative warehouse path must not reach Iceberg as `file://./x`,
+    /// which resolves to `/./x` - rooted at `/` rather than at the cwd -
+    /// and fails with "permission denied" only once a table write gets
+    /// deep enough to create a directory.
+    #[test]
+    fn a_relative_warehouse_path_resolves_against_the_current_directory() {
+        let resolved = absolute_warehouse(Path::new("./warehouse")).expect("should resolve");
+        let expected = std::env::current_dir().expect("cwd").join("warehouse");
+
+        assert!(resolved.is_absolute(), "got {}", resolved.display());
+        assert_eq!(resolved, expected);
+        assert!(
+            !resolved.to_string_lossy().contains("/./"),
+            "the `.` component must be dropped, got {}",
+            resolved.display()
+        );
+    }
+
+    /// The warehouse normally does not exist yet - nothing has been
+    /// ingested and Iceberg is about to create it. `canonicalize` would
+    /// reject that; resolution has to stay lexical.
+    #[test]
+    fn a_warehouse_path_that_does_not_exist_yet_still_resolves() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("not-created-yet").join("warehouse");
+        assert!(!missing.exists());
+
+        assert_eq!(
+            absolute_warehouse(&missing).expect("should resolve a missing path"),
+            missing
+        );
+    }
+
     #[tokio::test]
     async fn a_table_created_through_one_handle_is_visible_through_another() {
         let dir = tempfile::tempdir().expect("tempdir");
