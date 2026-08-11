@@ -1,3 +1,4 @@
+<meta charset="UTF-8">
 <title>Cloud Cost Management, as a graph</title>
 <style>
   :root {
@@ -411,12 +412,11 @@
     <h1>Cloud Cost Management, as a graph</h1>
     <p class="lede">
       A cloud-resource inventory joined to a separate billing dataset — the join is a real
-      edge in the graph, not a runtime SQL join. This is the exact dataset and query shape the
-      engine's own demo pipeline computes (<code class="mono">ingest-cloud-cost</code> →
-      <code class="mono">graph-partition-node</code> → <code class="mono">graph-coordinator</code> →
-      <code class="mono">query-client</code>). Edit the query on the right and run it — the
-      highlighting below is recomputed against this page's embedded copy of the dataset, not
-      decorative.
+      edge in the graph, not a runtime SQL join. This page is served by
+      <code class="mono">graph-viewer-server</code> and calls it over HTTP to run your query
+      against a live <code class="mono">graph-coordinator</code>, the same one
+      <code class="mono">query-client</code> talks to — no query logic runs in this browser.
+      Edit the query on the right and run it.
     </p>
   </header>
 
@@ -437,15 +437,17 @@
           </marker>
         </defs>
 
-        <!-- structural edges (OWNS / CONTAINS) -->
+        <!-- structural edges (OWNS / CONTAINS) — data-id names which
+             resource this edge leads to, so the query panel can light
+             up exactly the edges on the path to a reached resource. -->
         <g>
           <line class="edge" data-hop="0" marker-end="url(#arrow)" x1="330" y1="72" x2="330" y2="128"></line>
-          <line class="edge" data-hop="1" marker-end="url(#arrow)" x1="315" y1="172" x2="205" y2="228"></line>
-          <line class="edge" data-hop="1" marker-end="url(#arrow)" x1="350" y1="172" x2="500" y2="228"></line>
-          <line class="edge" data-hop="2" marker-end="url(#arrow)" x1="165" y1="270" x2="105" y2="328"></line>
-          <line class="edge" data-hop="2" marker-end="url(#arrow)" x1="210" y1="270" x2="270" y2="328"></line>
-          <line class="edge" data-hop="3" marker-end="url(#arrow)" x1="80" y1="370" x2="80" y2="428"></line>
-          <line class="edge" data-hop="4" marker-end="url(#arrow)" x1="80" y1="470" x2="80" y2="528"></line>
+          <line class="edge" data-hop="1" data-id="subnet" marker-end="url(#arrow)" x1="315" y1="172" x2="205" y2="228"></line>
+          <line class="edge" data-hop="1" data-id="rds" marker-end="url(#arrow)" x1="350" y1="172" x2="500" y2="228"></line>
+          <line class="edge" data-hop="2" data-id="i1" marker-end="url(#arrow)" x1="165" y1="270" x2="105" y2="328"></line>
+          <line class="edge" data-hop="2" data-id="i2" marker-end="url(#arrow)" x1="210" y1="270" x2="270" y2="328"></line>
+          <line class="edge" data-hop="3" data-id="vol" marker-end="url(#arrow)" x1="80" y1="370" x2="80" y2="428"></line>
+          <line class="edge" data-hop="4" data-id="snap" marker-end="url(#arrow)" x1="80" y1="470" x2="80" y2="528"></line>
         </g>
 
         <!-- cost edges (HAS_COST) -->
@@ -577,17 +579,17 @@
   -[:CONTAINS*1..3]-> (r:Resource)
   -[:HAS_COST]-> (c:CostRecord)
 WHERE c.amount_usd > 100
-RETURN r</textarea>
+RETURN r, c</textarea>
         <div class="query-actions">
           <button type="button" id="btn-run" class="btn btn-primary">Run query</button>
           <button type="button" id="btn-reset" class="btn btn-ghost">Reset</button>
         </div>
         <p class="query-error" id="query-error" role="alert" hidden></p>
-        <p class="empty-hint" style="margin-top:10px;">
-          Only the <code class="mono">CONTAINS*min..max</code> hop range and the
-          <code class="mono">WHERE c.amount_usd</code> threshold are evaluated live against
-          this page's embedded dataset — the rest of the pattern is fixed to match
-          <code class="mono">examples/ingest-cloud-cost</code>.
+        <p class="empty-hint" id="query-status" style="margin-top:10px;">
+          Sent as-is to <code class="mono">POST /api/query</code>, parsed and executed by the
+          real <code class="mono">graph-coordinator</code>. Include both <code class="mono">r</code>
+          and <code class="mono">c</code> in <code class="mono">RETURN</code> to see resource name
+          and cost together.
         </p>
       </div>
 
@@ -629,86 +631,143 @@ RETURN r</textarea>
 
 <script>
 (function () {
-  var RESOURCES = [
-    { id: 'subnet', name: 'subnet-prod-a', hops: 1, cost: 5 },
-    { id: 'rds', name: 'rds-orders-db', hops: 1, cost: 340 },
-    { id: 'i1', name: 'i-checkout-api-1', hops: 2, cost: 245 },
-    { id: 'i2', name: 'i-checkout-api-2', hops: 2, cost: 40 },
-    { id: 'vol', name: 'vol-checkout-api-1', hops: 3, cost: 12 },
-    { id: 'snap', name: 'snap-checkout-api-1', hops: 4, cost: 500 }
+  // The only thing this page still knows about the dataset: which of the
+  // diagram's pre-drawn SVG nodes a returned `Resource.name` corresponds
+  // to. Everything about *which* resources match a query — traversal,
+  // hop range, the WHERE filter — is decided server-side by the real
+  // graph-coordinator via POST /api/query, not here.
+  var KNOWN_RESOURCES = [
+    { svgId: 'subnet', name: 'subnet-prod-a' },
+    { svgId: 'rds', name: 'rds-orders-db' },
+    { svgId: 'i1', name: 'i-checkout-api-1' },
+    { svgId: 'i2', name: 'i-checkout-api-2' },
+    { svgId: 'vol', name: 'vol-checkout-api-1' },
+    { svgId: 'snap', name: 'snap-checkout-api-1' }
   ];
 
-  var OP_LABEL = { '>': '>', '<': '<', '>=': '>=', '<=': '<=', '=': '=' };
-
-  function compare(value, op, threshold) {
-    switch (op) {
-      case '>': return value > threshold;
-      case '<': return value < threshold;
-      case '>=': return value >= threshold;
-      case '<=': return value <= threshold;
-      case '=': return value === threshold;
-      default: return false;
-    }
-  }
-
-  function parseQuery(text) {
-    var hopMatch = text.match(/CONTAINS\s*\*\s*(\d+)\s*\.\.\s*(\d+)\s*\]/);
-    if (!hopMatch) {
-      throw new Error('Could not find a hop range like CONTAINS*1..3] in the pattern.');
-    }
-    var minHop = parseInt(hopMatch[1], 10);
-    var maxHop = parseInt(hopMatch[2], 10);
-    if (maxHop < minHop) {
-      throw new Error('The hop range max (' + maxHop + ') is smaller than its min (' + minHop + ').');
-    }
-    if (maxHop > 20) {
-      throw new Error('Hop range max is capped at 20 for this demo dataset.');
-    }
-
-    var thresholdMatch = text.match(/c\.amount_usd\s*(>=|<=|==|>|<|=)\s*(\d+(?:\.\d+)?)/);
-    if (!thresholdMatch) {
-      throw new Error('Could not find a WHERE c.amount_usd comparison (e.g. WHERE c.amount_usd > 100).');
-    }
-    var op = thresholdMatch[1] === '==' ? '=' : thresholdMatch[1];
-    var threshold = parseFloat(thresholdMatch[2]);
-
-    return { minHop: minHop, maxHop: maxHop, op: op, threshold: threshold };
-  }
-
-  function evaluate(params) {
-    return RESOURCES.map(function (r) {
-      var inRange = r.hops >= params.minHop && r.hops <= params.maxHop;
-      var passesFilter = compare(r.cost, params.op, params.threshold);
-      var included = inRange && passesFilter;
-      var reason = null;
-      if (!included) {
-        reason = !inRange
-          ? (r.hops + ' hop' + (r.hops === 1 ? '' : 's') + ' — outside *' + params.minHop + '..' + params.maxHop)
-          : ('$' + r.cost + '/mo — fails amount_usd ' + OP_LABEL[params.op] + ' ' + params.threshold);
-      }
-      return { id: r.id, name: r.name, hops: r.hops, cost: r.cost, included: included, reason: reason };
+  async function postQuery(dsl) {
+    var res = await fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dsl: dsl })
     });
+    var body = await res.json().catch(function () { return {}; });
+    if (!res.ok) {
+      throw new Error(body.error || ('graph-viewer-server returned HTTP ' + res.status));
+    }
+    return body.rows || [];
   }
 
-  function applyToSvg(evalResults, params) {
-    evalResults.forEach(function (r) {
-      var node = document.querySelector('.node[data-id="' + r.id + '"]');
+  function findByLabel(row, label) {
+    for (var alias in row) {
+      if (row[alias] && row[alias].label === label) return row[alias];
+    }
+    return null;
+  }
+
+  function indexRowsByResourceName(rows) {
+    var byName = {};
+    rows.forEach(function (row) {
+      var resource = findByLabel(row, 'Resource');
+      if (!resource || !resource.properties || !resource.properties.name) return;
+      byName[resource.properties.name] = {
+        resource: resource,
+        cost: findByLabel(row, 'CostRecord')
+      };
+    });
+    return byName;
+  }
+
+  /// Best-effort variant of the typed query with its WHERE amount_usd
+  /// comparison loosened to always-true — used only to distinguish, in
+  /// the "excluded, and why" panel, "reached but filtered by WHERE" from
+  /// "never reached by the pattern at all". Still a real second query
+  /// executed by the real coordinator, not a client-side guess; returns
+  /// null when the text doesn't have a WHERE c.amount_usd clause to
+  /// loosen (nothing to compare against, so the distinction is skipped).
+  function looseningWhereVariant(text) {
+    var loosened = text.replace(
+      /WHERE\s+c\.amount_usd\s*(>=|<=|==|>|<|=)\s*-?\d+(\.\d+)?/,
+      'WHERE c.amount_usd > -1'
+    );
+    return loosened === text ? null : loosened;
+  }
+
+  function applyToSvg(statuses) {
+    var bySvgId = {};
+    statuses.forEach(function (s) { bySvgId[s.svgId] = s; });
+
+    statuses.forEach(function (s) {
+      var node = document.querySelector('.node[data-id="' + s.svgId + '"]');
       if (!node) return;
-      node.setAttribute('data-status', r.included ? 'included' : 'excluded');
+      node.setAttribute('data-status', s.included ? 'included' : 'excluded');
       var badge = node.querySelector('.badge');
       var why = node.querySelector('.why');
-      if (badge) badge.textContent = r.included ? ('$' + r.cost + '/mo · kept') : '';
-      if (why) why.textContent = r.included ? '' : r.reason;
+      if (badge) badge.textContent = s.included ? s.badgeText : '';
+      if (why) why.textContent = s.included ? '' : s.reason;
 
-      var costEdge = document.querySelector('.edge--cost[data-id="' + r.id + '"]');
-      if (costEdge) costEdge.setAttribute('data-result', r.included ? 'included' : 'excluded');
+      var costEdge = document.querySelector('.edge--cost[data-id="' + s.svgId + '"]');
+      if (costEdge) costEdge.setAttribute('data-result', s.included ? 'included' : 'excluded');
     });
 
+    // Each structural edge's data-id names the resource it leads to
+    // (hop 0, account->vpc, has none and is always on the path). Lit up
+    // iff that resource was reached by the pattern, per computeStatuses.
     document.querySelectorAll('.edge[data-hop]').forEach(function (edge) {
-      var hop = parseInt(edge.getAttribute('data-hop'), 10);
-      var inRange = hop === 0 || hop <= params.maxHop;
+      var target = edge.getAttribute('data-id');
+      var status = target && bySvgId[target];
+      var inRange = !target || (status && status.reachedPattern);
       edge.classList.toggle('edge--in-range', inRange);
       edge.classList.toggle('edge--out-of-range', !inRange);
+    });
+  }
+
+  function computeStatuses(actualRows, reachableRows) {
+    var actualByName = indexRowsByResourceName(actualRows);
+    var reachableByName = reachableRows ? indexRowsByResourceName(reachableRows) : null;
+
+    return KNOWN_RESOURCES.map(function (known) {
+      var hit = actualByName[known.name];
+      if (hit) {
+        var amount = hit.cost && hit.cost.properties && hit.cost.properties.amount_usd;
+        return {
+          svgId: known.svgId,
+          name: known.name,
+          included: true,
+          reachedPattern: true,
+          badgeText: (amount != null ? '$' + amount + '/mo' : '') + ' · kept',
+          amount: amount
+        };
+      }
+
+      if (reachableByName) {
+        var reached = reachableByName[known.name];
+        if (reached) {
+          var reachedAmount = reached.cost && reached.cost.properties && reached.cost.properties.amount_usd;
+          return {
+            svgId: known.svgId,
+            name: known.name,
+            included: false,
+            reachedPattern: true,
+            reason: (reachedAmount != null ? '$' + reachedAmount + '/mo' : 'value') + ' — filtered out by WHERE'
+          };
+        }
+        return {
+          svgId: known.svgId,
+          name: known.name,
+          included: false,
+          reachedPattern: false,
+          reason: 'not reached by this query’s pattern'
+        };
+      }
+
+      return {
+        svgId: known.svgId,
+        name: known.name,
+        included: false,
+        reachedPattern: false,
+        reason: 'not returned by this query'
+      };
     });
   }
 
@@ -724,26 +783,26 @@ RETURN r</textarea>
       rows.map(function (r) {
         return '<div class="stat-row"><span>' + r[0] + '</span><span class="n mono">' + r[1] + '</span></div>';
       }).join('') +
-      '<p class="empty-hint" style="margin-top:10px;">Switch to “query result”, or run the query on the right, to see the traversal narrow this down.</p>';
+      '<p class="empty-hint" style="margin-top:10px;">Switch to “query result”, or run the query on the right, to hit the live coordinator.</p>';
   }
 
-  function renderQuery(evalResults) {
-    var included = evalResults.filter(function (r) { return r.included; });
-    var excluded = evalResults.filter(function (r) { return !r.included; });
+  function renderQuery(statuses) {
+    var included = statuses.filter(function (s) { return s.included; });
+    var excluded = statuses.filter(function (s) { return !s.included; });
 
     document.getElementById('results-title').textContent = 'Result — ' + included.length + ' row' + (included.length === 1 ? '' : 's');
     var html;
     if (included.length) {
-      html = '<ul class="result-list">' + included.map(function (r) {
-        return '<li><span>' + r.name + '</span><span class="amt mono">$' + r.cost + '/mo</span></li>';
+      html = '<ul class="result-list">' + included.map(function (s) {
+        return '<li><span>' + s.name + '</span><span class="amt mono">' + (s.amount != null ? '$' + s.amount + '/mo' : '—') + '</span></li>';
       }).join('') + '</ul>';
     } else {
-      html = '<p class="empty-hint">No resources match this query.</p>';
+      html = '<p class="empty-hint">No resources matched this query.</p>';
     }
     if (excluded.length) {
       html += '<p class="empty-hint" style="margin-top:12px; margin-bottom:6px;">Excluded, and why:</p>';
-      html += '<ul class="result-list">' + excluded.map(function (r) {
-        return '<li style="border-left-color: var(--excluded-stroke);"><span>' + r.name + '</span><span class="mono" style="color:var(--ink-faint); font-size:11.5px;">' + r.reason + '</span></li>';
+      html += '<ul class="result-list">' + excluded.map(function (s) {
+        return '<li style="border-left-color: var(--excluded-stroke);"><span>' + s.name + '</span><span class="mono" style="color:var(--ink-faint); font-size:11.5px;">' + s.reason + '</span></li>';
       }).join('') + '</ul>';
     }
     document.getElementById('results-body').innerHTML = html;
@@ -751,43 +810,63 @@ RETURN r</textarea>
 
   var btnFull = document.getElementById('btn-full');
   var btnQuery = document.getElementById('btn-query');
+  var btnRun = document.getElementById('btn-run');
+  var btnReset = document.getElementById('btn-reset');
   var input = document.getElementById('query-input');
   var errorBox = document.getElementById('query-error');
+  var statusLine = document.getElementById('query-status');
   var defaultQueryText = input.value;
-  var lastEvalResults = null;
+  var lastStatuses = null;
 
   function setMode(query) {
     document.body.classList.toggle('mode-query', query);
     btnFull.setAttribute('aria-pressed', String(!query));
     btnQuery.setAttribute('aria-pressed', String(query));
-    if (query && lastEvalResults) renderQuery(lastEvalResults); else if (!query) renderFull();
+    if (query && lastStatuses) renderQuery(lastStatuses); else if (!query) renderFull();
   }
 
-  function runQuery(switchToQueryMode) {
-    var params;
+  async function runQuery(switchToQueryMode) {
+    var dsl = input.value;
+    btnRun.disabled = true;
+    btnRun.textContent = 'Running…';
+    var startedAt = Date.now ? Date.now() : 0;
     try {
-      params = parseQuery(input.value);
+      var actualRows = await postQuery(dsl);
+      var reachableRows = null;
+      var variant = looseningWhereVariant(dsl);
+      if (variant) {
+        try {
+          reachableRows = await postQuery(variant);
+        } catch (e) {
+          reachableRows = null; // best-effort only — the primary result still stands.
+        }
+      }
+      errorBox.hidden = true;
+      lastStatuses = computeStatuses(actualRows, reachableRows);
+      applyToSvg(lastStatuses);
+      statusLine.textContent = actualRows.length + ' row' + (actualRows.length === 1 ? '' : 's') +
+        ' back from the live coordinator just now.';
+      if (switchToQueryMode) setMode(true);
+      else if (document.body.classList.contains('mode-query')) renderQuery(lastStatuses);
     } catch (err) {
       errorBox.textContent = err.message;
       errorBox.hidden = false;
-      return;
+    } finally {
+      btnRun.disabled = false;
+      btnRun.textContent = 'Run query';
     }
-    errorBox.hidden = true;
-    lastEvalResults = evaluate(params);
-    applyToSvg(lastEvalResults, params);
-    if (switchToQueryMode) setMode(true);
-    else if (document.body.classList.contains('mode-query')) renderQuery(lastEvalResults);
   }
 
   btnFull.addEventListener('click', function () { setMode(false); });
-  btnQuery.addEventListener('click', function () { setMode(true); });
-  document.getElementById('btn-run').addEventListener('click', function () { runQuery(true); });
-  document.getElementById('btn-reset').addEventListener('click', function () {
+  btnQuery.addEventListener('click', function () {
+    if (lastStatuses) setMode(true); else runQuery(true);
+  });
+  btnRun.addEventListener('click', function () { runQuery(true); });
+  btnReset.addEventListener('click', function () {
     input.value = defaultQueryText;
     runQuery(true);
   });
 
   renderFull();
-  runQuery(false);
 })();
 </script>

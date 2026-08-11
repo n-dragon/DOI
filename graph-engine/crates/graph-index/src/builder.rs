@@ -9,8 +9,8 @@
 //! reference.
 
 use crate::{
-    AdjacencyEntry, GenerationMeta, IndexBuilder, IndexGeneration, LocalIdx, PartitionId,
-    PropertyIndex, PropertyKey, RebuildError, TopologicalIndex,
+    AdjacencyEntry, GenerationMeta, IndexBuilder, IndexGeneration, LocalIdx, NodeRecord,
+    PartitionId, PropertyIndex, PropertyKey, RebuildError, TopologicalIndex,
 };
 use futures::StreamExt;
 use graph_schema::{EdgeType, Label, NodeId, Schema};
@@ -75,6 +75,21 @@ impl<R: IcebergReader> IndexBuilder for IcebergIndexBuilder<R> {
         let edge_count = edges.len() as u64;
         let topology = build_topology(&nodes, &edges);
         let properties = build_property_index(&self.schema, &nodes);
+        // Consumes `nodes` — nothing needs the scanned rows after this,
+        // so this moves the already-read properties instead of cloning
+        // them a second time.
+        let node_records: HashMap<NodeId, NodeRecord> = nodes
+            .into_iter()
+            .map(|(label, row)| {
+                (
+                    row.id,
+                    NodeRecord {
+                        label,
+                        properties: row.properties,
+                    },
+                )
+            })
+            .collect();
 
         Ok(IndexGeneration {
             meta: GenerationMeta {
@@ -89,6 +104,7 @@ impl<R: IcebergReader> IndexBuilder for IcebergIndexBuilder<R> {
             },
             topology,
             properties,
+            node_records,
         })
     }
 }
@@ -422,6 +438,26 @@ mod tests {
         assert_eq!(born_1990_or_before, vec![NodeId(1), NodeId(2)]);
     }
 
+    /// `node_records` retains each node's full property set, forward-
+    /// keyed by id — what `GetNodeProperties` reads from.
+    #[tokio::test]
+    async fn node_records_hold_the_full_property_set_per_id() {
+        let gen = build_test_generation().await;
+
+        let bob = gen.node_records.get(&NodeId(2)).expect("Bob was scanned");
+        assert_eq!(bob.label.0, "Person");
+        assert_eq!(
+            bob.properties.get("name"),
+            Some(&PropertyValue::String("Bob".to_string()))
+        );
+        assert_eq!(
+            bob.properties.get("birth_year"),
+            Some(&PropertyValue::Int64(1990))
+        );
+
+        assert!(!gen.node_records.contains_key(&NodeId(999)));
+    }
+
     /// *(task IX8)* A query that has already `acquire()`d a generation
     /// keeps seeing it consistently after a concurrent `swap()` — no
     /// torn reads, no panic. The old generation isn't dropped until this
@@ -444,6 +480,7 @@ mod tests {
             },
             topology: build_topology(&[], &[]),
             properties: build_property_index(&small_social_schema(), &[]),
+            node_records: HashMap::new(),
         };
         handle.swap(new_generation);
 

@@ -32,8 +32,11 @@ graph-engine/
 ```
 
 Chaque crate de `crates/` est une librairie sans état de processus ; les
-deux binaires de `bin/` sont les seuls points d'entrée réseau, et
-correspondent exactement aux deux rôles du cluster définis en §6.1.
+deux binaires ci-dessus sont les seuls points d'entrée réseau du
+*cluster* et correspondent exactement aux deux rôles définis en §6.1.
+`bin/graph-viewer-server` (§5 ci-dessous) est un troisième binaire, hors
+cluster : un client de `graph-coordinator` comme un autre, pas un rôle
+du spec.
 
 ## 2. Graphe de dépendances
 
@@ -128,10 +131,16 @@ tâche par tâche dans `TASKS.md` (tout ce qui y est coché `✅`) :
   spec §12 Phase 1).
 - Déploiement multi-process réel, vérifié pour de vrai (pas juste en
   théorie) : `examples/ingest-cloud-cost` (ingestion),
-  `graph-partition-node`, `graph-coordinator` et `examples/query-client`
-  (CLI de requête) lancés comme quatre process séparés, partageant le
+  `graph-partition-node`, `graph-coordinator`, `bin/graph-viewer-server`
+  (pont HTTP↔gRPC pour `viewer/index.html`) et `examples/query-client`
+  (CLI de requête) lancés comme cinq process séparés, partageant le
   catalogue SQLite persistant (`graph_storage::open_sql_catalog`) —
-  requête correcte de bout en bout à travers les quatre.
+  requête correcte de bout en bout à travers eux, y compris via un vrai
+  appel HTTP navigateur → `graph-viewer-server` → `graph-coordinator`.
+  `GetNodeProperties`, ajouté à `PartitionService`, hydrate chaque
+  `NodeId` résolu avec ses propriétés réelles avant de streamer le
+  résultat — le client n'a plus à connaître le jeu de données pour
+  afficher autre chose qu'un id opaque.
 
 Reste à faire (Phase 2) :
 - Distribution multi-partitions (`graph-cluster`, `DistributedExecutor`,

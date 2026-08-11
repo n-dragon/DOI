@@ -15,12 +15,13 @@ use graph_proto::v1::graph_service_server::GraphService;
 use graph_proto::v1::partition_service_client::PartitionServiceClient;
 use graph_proto::v1::value::Kind as ValueKind;
 use graph_proto::v1::{
-    health_check_response, ExecuteQueryRequest, GetIndexStatusRequest, GetSchemaRequest,
-    HealthCheckRequest, HealthCheckResponse, IndexStatusResponse, QueryResult, SchemaResponse,
-    Value as ProtoValue,
+    health_check_response, ExecuteQueryRequest, GetIndexStatusRequest, GetNodePropertiesRequest,
+    GetSchemaRequest, HealthCheckRequest, HealthCheckResponse, IndexStatusResponse, QueryResult,
+    SchemaResponse, Value as ProtoValue,
 };
 use graph_query::{NaivePlanner, Planner};
 use graph_schema::Schema;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
@@ -75,13 +76,43 @@ impl GraphService for GraphServiceImpl {
         let bindings = remote_executor::execute(&mut client, &plan).await?;
 
         let project = plan.project;
+
+        // Every distinct NodeId that will end up in some row's
+        // projection, deduped once up front so a result set with
+        // repeated nodes across rows still costs one GetNodeProperties
+        // round-trip rather than one per row.
+        let needed_ids: Vec<u64> = bindings
+            .iter()
+            .flat_map(|binding| {
+                project
+                    .iter()
+                    .filter_map(|alias| binding.node_ids_by_alias.get(alias).copied())
+            })
+            .collect::<HashSet<u64>>()
+            .into_iter()
+            .collect();
+
+        let properties_by_id: HashMap<u64, graph_proto::v1::NodeProperties> = if needed_ids
+            .is_empty()
+        {
+            HashMap::new()
+        } else {
+            client
+                .get_node_properties(GetNodePropertiesRequest {
+                    node_ids: needed_ids,
+                })
+                .await?
+                .into_inner()
+                .properties
+        };
+
         let results: Vec<Result<QueryResult, Status>> = bindings
             .into_iter()
             .map(|binding| {
                 // NodeId is bit-cast into int64_value (Value has no
                 // unsigned-integer case) — the same technique
                 // graph-storage uses at the Iceberg boundary.
-                let projection = project
+                let projection: std::collections::HashMap<String, ProtoValue> = project
                     .iter()
                     .filter_map(|alias| {
                         binding.node_ids_by_alias.get(alias).map(|&id| {
@@ -94,7 +125,18 @@ impl GraphService for GraphServiceImpl {
                         })
                     })
                     .collect();
-                Ok(QueryResult { projection })
+                let properties = project
+                    .iter()
+                    .filter_map(|alias| {
+                        let id = *binding.node_ids_by_alias.get(alias)?;
+                        let record = properties_by_id.get(&id)?;
+                        Some((alias.clone(), record.clone()))
+                    })
+                    .collect();
+                Ok(QueryResult {
+                    projection,
+                    properties,
+                })
             })
             .collect();
 

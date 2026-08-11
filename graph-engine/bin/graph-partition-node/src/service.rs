@@ -11,17 +11,18 @@
 #![allow(clippy::result_large_err)]
 
 use graph_dsl::{ComparisonOp, Direction, HopRange, Literal, PropertyFilter};
-use graph_index::{GenerationHandle, PropertyKey};
+use graph_index::{GenerationHandle, NodeRecord, PropertyKey};
 use graph_proto::v1::partition_service_server::PartitionService;
 use graph_proto::v1::value::Kind;
 use graph_proto::v1::{
     health_check_response, Binding as ProtoBinding, ComparisonOp as ProtoComparisonOp,
-    ExpandHopRequest, GetIndexStatusRequest, HealthCheckRequest, HealthCheckResponse,
-    IndexStatusResponse, PropertyFilter as ProtoPropertyFilter, ResolveStartRequest,
-    Value as ProtoValue,
+    ExpandHopRequest, GetIndexStatusRequest, GetNodePropertiesRequest,
+    GetNodePropertiesResponse, HealthCheckRequest, HealthCheckResponse, IndexStatusResponse,
+    NodeProperties, PropertyFilter as ProtoPropertyFilter, ResolveStartRequest, Value as ProtoValue,
 };
 use graph_query::{Binding, LocalExecutor, PlanStep, SimpleLocalExecutor};
 use graph_schema::NodeId;
+use graph_storage::PropertyValue;
 use std::pin::Pin;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -126,6 +127,32 @@ impl PartitionService for PartitionServiceImpl {
         }))
     }
 
+    /// Point lookup used by the coordinator to hydrate a query's results
+    /// with real property data once traversal has resolved which
+    /// `NodeId`s matched — silently skips any id this generation doesn't
+    /// know (e.g. one from a since-rebuilt older generation) rather than
+    /// erroring the whole batch.
+    async fn get_node_properties(
+        &self,
+        request: Request<GetNodePropertiesRequest>,
+    ) -> Result<Response<GetNodePropertiesResponse>, Status> {
+        let generation = self.generation.acquire();
+        let req = request.into_inner();
+
+        let properties = req
+            .node_ids
+            .into_iter()
+            .filter_map(|id| {
+                generation
+                    .node_records
+                    .get(&NodeId(id))
+                    .map(|record| (id, node_record_to_proto(record)))
+            })
+            .collect();
+
+        Ok(Response::new(GetNodePropertiesResponse { properties }))
+    }
+
     async fn health_check(
         &self,
         _request: Request<HealthCheckRequest>,
@@ -134,6 +161,36 @@ impl PartitionService for PartitionServiceImpl {
             status: health_check_response::Status::Serving as i32,
         }))
     }
+}
+
+fn node_record_to_proto(record: &NodeRecord) -> NodeProperties {
+    NodeProperties {
+        label: record.label.0.clone(),
+        fields: record
+            .properties
+            .iter()
+            .filter_map(|(name, value)| {
+                property_value_to_proto(value).map(|v| (name.clone(), v))
+            })
+            .collect(),
+    }
+}
+
+/// `List`/`Null` have no `Value` oneof variant (same gap `PropertyKey`
+/// has, for the same reason — see its doc comment) — dropped from the
+/// projected field set rather than erroring the whole record over one
+/// unrepresentable property.
+fn property_value_to_proto(value: &PropertyValue) -> Option<ProtoValue> {
+    let kind = match value {
+        PropertyValue::Int64(v) => Kind::Int64Value(*v),
+        PropertyValue::Float64(v) => Kind::Float64Value(*v),
+        PropertyValue::Bool(v) => Kind::BoolValue(*v),
+        PropertyValue::String(v) => Kind::StringValue(v.clone()),
+        PropertyValue::Timestamp(v) => Kind::TimestampValue(*v),
+        PropertyValue::Bytes(v) => Kind::BytesValue(v.clone()),
+        PropertyValue::List(_) | PropertyValue::Null => return None,
+    };
+    Some(ProtoValue { kind: Some(kind) })
 }
 
 fn bindings_to_stream(bindings: Vec<Binding>) -> BindingStream {

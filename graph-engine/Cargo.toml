@@ -14,6 +14,7 @@ members = [
     "examples/query-client",
     "bin/graph-partition-node",
     "bin/graph-coordinator",
+    "bin/graph-viewer-server",
 ]
 
 [workspace.package]
@@ -37,6 +38,9 @@ futures = "0.3"
 tonic = "0.11"
 prost = "0.12"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = "0.7"
+tower-http = { version = "0.6", features = ["fs"] }
 thiserror = "1"
 arc-swap = "1"
 tracing = "0.1"

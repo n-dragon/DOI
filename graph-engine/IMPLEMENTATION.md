@@ -376,10 +376,9 @@ où ça reste le choix le plus simple.
 
 ---
 
-## examples/ — démonstration et outillage
+## examples/ + bin/graph-viewer-server — démonstration et outillage
 
-Trois petits binaires, plus une page web statique, hors du moteur
-lui-même, pour le prendre en main :
+Hors du moteur lui-même, pour le prendre en main :
 
 - **`examples/demo`** (`graph-engine-demo`) — tout en un seul process :
   ingère un petit graphe Cloud Cost Management, construit l'index,
@@ -394,18 +393,27 @@ lui-même, pour le prendre en main :
   `graph-coordinator` en cours d'exécution (`GRAPH_COORDINATOR_ADDR`,
   requête DSL en argument), utile pour vérifier un déploiement sans
   relire des assertions de test. `cargo run -p query-client -- '<DSL>'`.
-- **`viewer/index.html`** — page HTML autonome (aucune dépendance, aucun
-  serveur) visualisant ce même jeu de données et la même requête : bascule
-  entre "graphe complet" et "résultat de la requête" (chaque nœud exclu
-  annoté de la raison — coût trop bas, ou trop de hops). Snapshot statique
-  du résultat déjà vérifié via `query-client`, pas un client qui interroge
-  un moteur en direct.
+- **`bin/graph-viewer-server`** — pont HTTP↔gRPC : sert `viewer/index.html`
+  en statique et expose `POST /api/query`, qui relaie le DSL tapé à un
+  `graph-coordinator` réel (`GraphService::ExecuteQuery`) et retourne les
+  lignes en JSON, propriétés incluses (via `GetNodeProperties`, cf.
+  section `GetNodeProperties` ci-dessus). `cargo run -p graph-viewer-server`.
+- **`viewer/index.html`** — page servie par `graph-viewer-server`,
+  visualisant ce même jeu de données. Bascule entre "graphe complet" et
+  "résultat de la requête" (chaque nœud exclu annoté de la raison — filtré
+  par le `WHERE`, ou jamais atteint par le pattern). Le panneau de requête
+  est éditable : chaque clic sur "Run query" est un vrai aller-retour HTTP
+  vers `graph-viewer-server`, donc un vrai aller-retour gRPC vers
+  `graph-coordinator` — aucune logique de requête n'est ré-implémentée
+  côté navigateur.
 
-Séquence pour un vrai déploiement multi-process (vérifiée) :
-`ingest-cloud-cost` → `graph-partition-node` → `graph-coordinator` →
-`query-client`, chacun un process séparé, `GRAPH_CATALOG_DB_PATH`/
-`GRAPH_WAREHOUSE_PATH`/`GRAPH_NAMESPACE` identiques entre l'ingestion et
-`graph-partition-node`.
+Séquence pour un vrai déploiement multi-process (vérifiée, cinq process
+séparés) : `ingest-cloud-cost` → `graph-partition-node` →
+`graph-coordinator` → `graph-viewer-server` (+ `query-client` pour
+vérifier en CLI), `GRAPH_CATALOG_DB_PATH`/`GRAPH_WAREHOUSE_PATH`/
+`GRAPH_NAMESPACE` identiques entre l'ingestion et `graph-partition-node`,
+`GRAPH_SCHEMA_PATH` identique sur `graph-partition-node` et
+`graph-coordinator`.
 
 ---
 

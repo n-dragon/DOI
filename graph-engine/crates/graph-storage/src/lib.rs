@@ -43,7 +43,7 @@ pub struct EdgeRow {
 
 /// Runtime property value — the storage-layer counterpart of
 /// `graph_schema::ScalarType`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PropertyValue {
     Int64(i64),
     Float64(f64),

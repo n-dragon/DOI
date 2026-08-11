@@ -32,6 +32,12 @@ service PartitionService {
   // GetIndexStatus (CO3) just relays this partition's GenerationMeta
   // verbatim, mono-partition v1 having exactly one to relay.
   rpc GetIndexStatus(GetIndexStatusRequest) returns (IndexStatusResponse);
+  // Point lookup of full node property records by id, used by the
+  // coordinator to hydrate `QueryResult.properties` after a traversal
+  // has resolved which `NodeId`s matched — the traversal itself never
+  // needs anything but ids, so this stays a separate RPC rather than
+  // being folded into ResolveStart/ExpandHop.
+  rpc GetNodeProperties(GetNodePropertiesRequest) returns (GetNodePropertiesResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
@@ -40,7 +46,26 @@ message ExecuteQueryRequest {
 }
 
 message QueryResult {
+  // NodeId per alias, bit-cast into int64_value — kept for callers that
+  // only need identity (e.g. joining across multiple queries).
   map<string, Value> projection = 1;
+  // The actual property record backing each alias in `projection`,
+  // hydrated via GetNodeProperties — what a human-facing client (like
+  // the viewer) renders instead of a bare internal id.
+  map<string, NodeProperties> properties = 2;
+}
+
+message GetNodePropertiesRequest {
+  repeated uint64 node_ids = 1;
+}
+
+message GetNodePropertiesResponse {
+  map<uint64, NodeProperties> properties = 1;
+}
+
+message NodeProperties {
+  string label = 1;
+  map<string, Value> fields = 2;
 }
 
 message Value {

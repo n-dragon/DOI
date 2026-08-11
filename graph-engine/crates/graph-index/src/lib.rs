@@ -14,8 +14,8 @@ pub use builder::IcebergIndexBuilder;
 
 use arc_swap::ArcSwap;
 use graph_schema::{EdgeId, EdgeType, Label, NodeId};
-use graph_storage::SnapshotId;
-use std::collections::HashMap;
+use graph_storage::{PropertyValue, SnapshotId};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Which physical partition this process is hosting a replica of. Assigned
@@ -147,6 +147,17 @@ impl PropertyIndex {
     }
 }
 
+/// A node's full property record, retained forward (`NodeId -> record`)
+/// alongside the topology/property-index structures that are built from
+/// the same scan — the only reason this exists is `GetNodeProperties`
+/// (spec §8.2 extension): a client that gets a `NodeId` back from a
+/// traversal needs a way to ask what it actually is.
+#[derive(Debug, Clone)]
+pub struct NodeRecord {
+    pub label: Label,
+    pub properties: BTreeMap<String, PropertyValue>,
+}
+
 /// Metadata surfaced verbatim by the `GetIndexStatus` RPC (§8.2).
 #[derive(Debug, Clone)]
 pub struct GenerationMeta {
@@ -162,6 +173,7 @@ pub struct IndexGeneration {
     pub meta: GenerationMeta,
     pub topology: TopologicalIndex,
     pub properties: PropertyIndex,
+    pub node_records: HashMap<NodeId, NodeRecord>,
 }
 
 /// Holds the currently-served generation and swaps it atomically once a

@@ -207,6 +207,33 @@ tâche n'est "faite" que si elle compile et que son test passe.
 > 1) — modèle de données et DSL validés de bout en bout avant d'attaquer
 > la distribution.
 
+### `GetNodeProperties` + `graph-viewer-server` — ✅ terminé
+
+Motivation : `execute_query` ne projetait qu'un `NodeId` bit-casté par
+alias — suffisant pour un test d'intégration, mais inutilisable pour un
+client humain (aucun moyen de savoir *quel* nœud a matché). Ajout :
+
+- **`graph-index`** — `IndexGeneration` retient désormais `node_records:
+  HashMap<NodeId, NodeRecord>` (label + propriétés complètes),
+  peuplé dans `IcebergIndexBuilder::build` à partir des lignes déjà
+  scannées pour construire la topologie/l'index de propriétés — aucun
+  I/O supplémentaire, juste ce qui était jusque-là jeté après le build.
+- **`graph-proto`** — nouvelle RPC `PartitionService::GetNodeProperties`
+  (lookup par lot d'ids) et `QueryResult.properties` (map alias →
+  `NodeProperties`), en plus de `projection` conservé tel quel.
+- **`graph-partition-node`** — `GetNodeProperties` répond depuis
+  `node_records` de la génération actuellement servie.
+- **`graph-coordinator`** — après avoir résolu les bindings, `execute_query`
+  déduplique les `NodeId` référencés par les alias du `RETURN`, appelle
+  `GetNodeProperties` une seule fois, et hydrate chaque ligne du
+  résultat avec les propriétés réelles.
+- **`bin/graph-viewer-server`** (nouveau) — pont HTTP↔gRPC : sert
+  `graph-engine/viewer/` en statique et expose `POST /api/query`, qui
+  relaie le DSL tapé tel quel à un `graph-coordinator` réel via
+  `GraphService::ExecuteQuery` et retourne les lignes en JSON. Aucune
+  logique de requête ne tourne dans le navigateur — `viewer/index.html`
+  appelle ce serveur, qui appelle le moteur réel.
+
 ---
 
 ## Phase 2 — Distribution

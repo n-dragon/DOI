@@ -1,28 +1,48 @@
 # Graph viewer
 
-A single self-contained `index.html` — no build step, no dependencies —
-visualizing the `examples/ingest-cloud-cost` dataset and walking through
-the spec §7.1-style example query (`OWNS`/`CONTAINS*1..3`/`HAS_COST`
-join, filtered on cost) that `examples/query-client` actually runs
-against a live `graph-coordinator`.
+`index.html` — no build step, no client-side dataset, no query logic in
+the browser — visualizing the `examples/ingest-cloud-cost` dataset and
+running the spec §7.1-style example query (`OWNS`/`CONTAINS*1..3`/
+`HAS_COST` join, filtered on cost) against a **live**
+`graph-coordinator`, the same one `examples/query-client` talks to.
 
-It's a static snapshot of that dataset — no backend call, no live
-`graph-coordinator` — but the query panel is *not* decorative: it
-re-evaluates the `CONTAINS*min..max` hop range and the
-`WHERE c.amount_usd` threshold against the six resources embedded in
-the page and recomputes the highlighting. The rest of the pattern
-(the account/VPC match, edge types) is fixed to this demo's dataset.
-Open it directly in a browser:
+It's served by `graph-viewer-server` (`bin/graph-viewer-server`), a thin
+HTTP↔gRPC bridge: it serves this static page and proxies the query panel's
+`POST /api/query` to `GraphService::ExecuteQuery` on a running
+coordinator. Nothing here re-implements traversal or filtering — the
+DSL text you type goes to the real parser/planner/executor and comes
+back as real results (via the coordinator's `GetNodeProperties` RPC,
+which hydrates each matched `NodeId` with its actual property record).
+
+## Running it
+
+From `graph-engine/`, with a warehouse already ingested (see
+`examples/ingest-cloud-cost`'s own doc comment):
 
 ```sh
-open graph-engine/viewer/index.html   # or just double-click it
+# 1. ingest the demo dataset into a persistent Iceberg catalog
+cargo run -p ingest-cloud-cost
+
+# 2/3. the two engine processes, each in its own terminal
+cargo run -p graph-partition-node
+cargo run -p graph-coordinator
+
+# 4. the viewer's HTTP bridge (serves this directory + proxies queries)
+cargo run -p graph-viewer-server
 ```
+
+Then open <http://localhost:8080>. `GRAPH_COORDINATOR_ADDR`,
+`GRAPH_VIEWER_STATIC_DIR`, and `GRAPH_VIEWER_LISTEN_ADDR` override the
+defaults if you're not running everything on localhost with default
+ports.
 
 Toggle between "full graph" (every node/edge, colored by type) and
 "query result" (the traversal highlighted, each excluded node annotated
-with why — cost too low, or too many hops). Edit the hop range or
-threshold in the query box and click "Run query" to see the result
-change live.
+with why — cost too low, or never reached by the pattern at all). Edit
+the query and click "Run query" — that's a real HTTP round trip to
+`graph-viewer-server`, which is a real gRPC round trip to
+`graph-coordinator`. A syntax or validation error from the DSL parser
+comes back and shows inline, same as it would from `query-client`.
 
 The palette is a visual homage to Datadog's brand purple
 (`#632CA6` / `#8000FF`) — chosen because this dataset mirrors
