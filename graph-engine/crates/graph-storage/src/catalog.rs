@@ -30,9 +30,11 @@ pub async fn open_sql_catalog(
     warehouse_path: &Path,
     namespace: &str,
 ) -> Result<SqlCatalog, StorageError> {
+    let abs_warehouse = std::fs::canonicalize(warehouse_path)
+        .map_err(|e| StorageError::Backend(format!("Failed to canonicalize warehouse path: {e}")))?;
     let catalog = SqlCatalogBuilder::default()
         .uri(format!("sqlite://{}?mode=rwc", sqlite_path.display()))
-        .warehouse_location(format!("file://{}", warehouse_path.display()))
+        .warehouse_location(format!("file://{}", abs_warehouse.display()))
         .sql_bind_style(SqlBindStyle::QMark) // SQLite dialect, not Postgres
         .with_storage_factory(Arc::new(LocalFsStorageFactory))
         .load("graph-engine", HashMap::new())
