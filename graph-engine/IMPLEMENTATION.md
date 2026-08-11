@@ -378,7 +378,8 @@ où ça reste le choix le plus simple.
 
 ## examples/ — démonstration et outillage
 
-Trois petits binaires, hors du moteur lui-même, pour le prendre en main :
+Trois petits binaires, plus une page web statique, hors du moteur
+lui-même, pour le prendre en main :
 
 - **`examples/demo`** (`graph-engine-demo`) — tout en un seul process :
   ingère un petit graphe Cloud Cost Management, construit l'index,
@@ -393,6 +394,12 @@ Trois petits binaires, hors du moteur lui-même, pour le prendre en main :
   `graph-coordinator` en cours d'exécution (`GRAPH_COORDINATOR_ADDR`,
   requête DSL en argument), utile pour vérifier un déploiement sans
   relire des assertions de test. `cargo run -p query-client -- '<DSL>'`.
+- **`viewer/index.html`** — page HTML autonome (aucune dépendance, aucun
+  serveur) visualisant ce même jeu de données et la même requête : bascule
+  entre "graphe complet" et "résultat de la requête" (chaque nœud exclu
+  annoté de la raison — coût trop bas, ou trop de hops). Snapshot statique
+  du résultat déjà vérifié via `query-client`, pas un client qui interroge
+  un moteur en direct.
 
 Séquence pour un vrai déploiement multi-process (vérifiée) :
 `ingest-cloud-cost` → `graph-partition-node` → `graph-coordinator` →
