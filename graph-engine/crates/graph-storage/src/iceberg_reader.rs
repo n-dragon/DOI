@@ -229,3 +229,295 @@ fn read_properties(
         })
         .collect()
 }
+
+/// *(task ST6)* Writes small `nodes_person`/`edges_knows` Iceberg tables
+/// for real (`MemoryCatalog` + local-filesystem `FileIO`, task ST1's dev
+/// setup) and checks `scan_nodes`/`scan_edges` read back exactly the rows
+/// written — including a `NULL` property. This is the only place in the
+/// crate that exercises actual Iceberg I/O; everything else (ST3's
+/// `property_value` tests) is pure in-memory Arrow.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::{Int64Array, StringArray};
+    use futures::StreamExt;
+    use graph_schema::SchemaParser;
+    use iceberg::io::LocalFsStorageFactory;
+    use iceberg::memory::{MemoryCatalogBuilder, MEMORY_CATALOG_WAREHOUSE};
+    use iceberg::spec::{NestedField, PrimitiveType, Schema as IcebergSchema, Type as IcebergType};
+    use iceberg::transaction::{ApplyTransactionAction, Transaction};
+    use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+    use iceberg::writer::file_writer::location_generator::{
+        DefaultFileNameGenerator, DefaultLocationGenerator,
+    };
+    use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+    use iceberg::writer::file_writer::ParquetWriterBuilder;
+    use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
+    use iceberg::{CatalogBuilder, TableCreation};
+    use parquet::file::properties::WriterProperties;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    /// A fresh `MemoryCatalog` + local-filesystem warehouse. Returns the
+    /// `TempDir` alongside it — dropping it deletes the warehouse, so it
+    /// must outlive every table operation in the test.
+    async fn test_catalog() -> (impl Catalog, NamespaceIdent, TempDir) {
+        let warehouse = tempfile::tempdir().expect("tempdir");
+        let namespace = NamespaceIdent::new("test_ns".to_string());
+
+        let catalog = MemoryCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "memory",
+                HashMap::from([(
+                    MEMORY_CATALOG_WAREHOUSE.to_string(),
+                    format!("file://{}", warehouse.path().display()),
+                )]),
+            )
+            .await
+            .expect("catalog should load");
+
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .expect("namespace should be created");
+
+        (catalog, namespace, warehouse)
+    }
+
+    /// Creates `table_name` with `iceberg_schema`, writes `batch` into it
+    /// as a single Parquet data file, and commits via a fast-append
+    /// transaction. Returns the post-commit `Table`.
+    async fn create_and_write_table(
+        catalog: &impl Catalog,
+        namespace: &NamespaceIdent,
+        table_name: &str,
+        iceberg_schema: IcebergSchema,
+        batch: RecordBatch,
+    ) -> iceberg::table::Table {
+        let table = catalog
+            .create_table(
+                namespace,
+                TableCreation::builder()
+                    .name(table_name.to_string())
+                    .schema(iceberg_schema)
+                    .build(),
+            )
+            .await
+            .expect("table should be created");
+
+        let location_generator = DefaultLocationGenerator::new(table.metadata())
+            .expect("location generator should build");
+        let file_name_generator = DefaultFileNameGenerator::new(
+            "test".to_string(),
+            None,
+            iceberg::spec::DataFileFormat::Parquet,
+        );
+        let parquet_writer_builder = ParquetWriterBuilder::new(
+            WriterProperties::default(),
+            table.metadata().current_schema().clone(),
+        );
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_writer_builder,
+            table.file_io().clone(),
+            location_generator,
+            file_name_generator,
+        );
+        let mut writer = DataFileWriterBuilder::new(rolling_writer_builder)
+            .build(None)
+            .await
+            .expect("data file writer should build");
+        writer.write(batch).await.expect("write should succeed");
+        let data_files = writer.close().await.expect("close should succeed");
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .add_data_files(data_files)
+            .apply(tx)
+            .expect("fast-append action should apply");
+        let table = tx.commit(catalog).await.expect("commit should succeed");
+        assert!(
+            table.metadata().current_snapshot_id().is_some(),
+            "commit should have produced a snapshot"
+        );
+        table
+    }
+
+    fn person_iceberg_schema() -> IcebergSchema {
+        IcebergSchema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "node_id", IcebergType::Primitive(PrimitiveType::Long))
+                    .into(),
+                NestedField::required(2, "name", IcebergType::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::optional(3, "age", IcebergType::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .expect("a schema with three well-formed fields should build")
+    }
+
+    fn person_graph_schema() -> Schema {
+        graph_schema::PestSchemaParser
+            .parse(
+                r#"
+                schema graph_v1 {
+                  node Person {
+                    id: NodeId
+                    name: String
+                    age: Int64?
+                  }
+                  edge KNOWS {
+                    from: Person
+                    to: Person
+                    since: Int64?
+                  }
+                }
+                "#,
+            )
+            .expect("valid IDL")
+    }
+
+    #[tokio::test]
+    async fn scan_nodes_reads_back_a_written_table() {
+        let (catalog, namespace, _warehouse) = test_catalog().await;
+
+        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(&person_iceberg_schema())
+            .expect("iceberg schema should convert to an arrow schema");
+        // Alice has an age; Bob's is NULL, to exercise the Null branch of
+        // ST3's read_property_value too.
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+                Arc::new(Int64Array::from(vec![Some(30), None])),
+            ],
+        )
+        .expect("batch should match the table's arrow schema");
+
+        let table_name = node_table_name(&Label("Person".to_string()));
+        create_and_write_table(
+            &catalog,
+            &namespace,
+            &table_name,
+            person_iceberg_schema(),
+            batch,
+        )
+        .await;
+
+        let reader = IcebergCatalogReader::new(catalog, namespace);
+        let snapshot = reader
+            .latest_snapshot(&table_name)
+            .await
+            .expect("latest_snapshot should resolve the committed snapshot");
+
+        let graph_schema = person_graph_schema();
+        let rows: Vec<NodeRow> = reader
+            .scan_nodes(&graph_schema, &Label("Person".to_string()), snapshot)
+            .await
+            .expect("scan_nodes should succeed")
+            .map(|r| r.expect("every row should deserialize"))
+            .collect()
+            .await;
+
+        assert_eq!(rows.len(), 2);
+
+        let alice = rows
+            .iter()
+            .find(|r| r.id == NodeId(1))
+            .expect("Alice's row");
+        assert!(matches!(
+            alice.properties.get("name"),
+            Some(PropertyValue::String(s)) if s == "Alice"
+        ));
+        assert!(matches!(
+            alice.properties.get("age"),
+            Some(PropertyValue::Int64(30))
+        ));
+
+        let bob = rows.iter().find(|r| r.id == NodeId(2)).expect("Bob's row");
+        assert!(matches!(
+            bob.properties.get("age"),
+            Some(PropertyValue::Null)
+        ));
+    }
+
+    #[tokio::test]
+    async fn scan_edges_reads_back_a_written_table() {
+        let (catalog, namespace, _warehouse) = test_catalog().await;
+
+        let knows_iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "edge_id", IcebergType::Primitive(PrimitiveType::Long))
+                    .into(),
+                NestedField::required(
+                    2,
+                    "src_node_id",
+                    IcebergType::Primitive(PrimitiveType::Long),
+                )
+                .into(),
+                NestedField::required(
+                    3,
+                    "dst_node_id",
+                    IcebergType::Primitive(PrimitiveType::Long),
+                )
+                .into(),
+                NestedField::optional(4, "since", IcebergType::Primitive(PrimitiveType::Long))
+                    .into(),
+            ])
+            .build()
+            .expect("a schema with four well-formed fields should build");
+
+        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(&knows_iceberg_schema)
+            .expect("iceberg schema should convert to an arrow schema");
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema),
+            vec![
+                Arc::new(Int64Array::from(vec![100])),
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(Int64Array::from(vec![2])),
+                Arc::new(Int64Array::from(vec![Some(2020)])),
+            ],
+        )
+        .expect("batch should match the table's arrow schema");
+
+        let table_name = edge_table_name(&EdgeType("KNOWS".to_string()));
+        create_and_write_table(
+            &catalog,
+            &namespace,
+            &table_name,
+            knows_iceberg_schema,
+            batch,
+        )
+        .await;
+
+        let reader = IcebergCatalogReader::new(catalog, namespace);
+        let snapshot = reader
+            .latest_snapshot(&table_name)
+            .await
+            .expect("latest_snapshot should resolve the committed snapshot");
+
+        let graph_schema = person_graph_schema();
+        let rows: Vec<EdgeRow> = reader
+            .scan_edges(&graph_schema, &EdgeType("KNOWS".to_string()), snapshot)
+            .await
+            .expect("scan_edges should succeed")
+            .map(|r| r.expect("every row should deserialize"))
+            .collect()
+            .await;
+
+        assert_eq!(rows.len(), 1);
+        let edge = &rows[0];
+        assert_eq!(edge.id, EdgeId(100));
+        assert_eq!(edge.src, NodeId(1));
+        assert_eq!(edge.dst, NodeId(2));
+        assert!(matches!(
+            edge.properties.get("since"),
+            Some(PropertyValue::Int64(2020))
+        ));
+    }
+}

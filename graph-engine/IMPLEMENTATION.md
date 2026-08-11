@@ -47,20 +47,43 @@ l'indexation ni des requêtes — juste "donne-moi les lignes d'une table à
 un snapshot donné".
 
 **Ce qu'elle expose.**
-- `SnapshotId`, `NodeRow`, `EdgeRow`, `PropertyValue`, `StorageError`.
+- `SnapshotId`, `NodeRow`, `EdgeRow`, `PropertyValue`, `StorageError`,
+  `NodeRowStream`/`EdgeRowStream`.
 - `IcebergReader` : trait à implémenter — `latest_snapshot`, `scan_nodes`,
-  `scan_edges`.
+  `scan_edges` (toutes `async fn`, les deux `scan_*` retournant un stream
+  plutôt qu'un itérateur sync : la lecture object-store sous-jacente est
+  intrinsèquement async). Implémentation : `IcebergCatalogReader<C>`,
+  générique sur tout `iceberg::Catalog`.
+- `node_table_name`/`edge_table_name` : convention de nommage §4.1
+  (`nodes_<label>`/`edges_<edge_type>`, en minuscules).
 
 **Dépend de** : `graph-schema`. **Dépend d'elle** : `graph-index`.
 
-**Fait.** Les types de lignes/valeurs, le contrat du trait.
+**Fait (ST1-ST6).** Crate Iceberg retenue : `apache/iceberg-rust` (crate
+`iceberg`, v0.10) — son API de scan `to_arrow()` retourne des
+`RecordBatch` Arrow, directement exploités par la désérialisation ST3.
+Catalogue dev : `iceberg::memory::MemoryCatalog` + `FileIO` filesystem
+local (métadonnées de catalogue en mémoire/éphémères, données de table
+réellement sur disque via `FileIO`, zéro infra supplémentaire).
+Catalogue prod : volontairement `TBD` (même posture que le
+partitionnement physique déjà `TBD` en §4.1) — candidat : catalogue REST
+devant un service managé (Glue/Polaris/Unity/Nessie), à trancher au
+déploiement ; `IcebergCatalogReader<C>` est générique sur `Catalog`, donc
+ce choix ne touche pas le code de lecture. `read_property_value` (ST3) :
+une branche par variante de `ScalarType`, testée directement sur des
+tableaux Arrow construits en mémoire (pas d'I/O). `scan_nodes`/`scan_edges`
+(ST4/ST5) : résolvent la table, streament les `RecordBatch`, les
+applatissent en `NodeRow`/`EdgeRow` — les colonnes d'identifiants
+(`node_id`/`edge_id`/`src_node_id`/`dst_node_id`) sont stockées en
+`Int64` signé et re-castées bit-à-bit vers les `u64` du moteur. Test
+d'intégration ST6 : écrit une vraie table Iceberg (catalogue mémoire +
+FileIO local), y committe un fichier Parquet réel via l'API `writer` de
+la crate, puis vérifie que `scan_nodes` relit exactement les lignes
+écrites (y compris une valeur `NULL`).
 
-**Reste à faire (Phase 0/1).**
-- Choisir et intégrer une crate Iceberg Rust (le projet
-  `apache/iceberg-rust` est le candidat naturel — catalogue + FileIO).
-- Implémentation concrète de `latest_snapshot` (résolution via le
-  catalogue Iceberg) et des deux `scan_*` (lecture Parquet sous-jacente,
-  désérialisation ligne → `NodeRow`/`EdgeRow` selon le `Schema`).
+**Reste à faire.** Rien côté Phase 0/1 pour cette crate — génération du
+schéma des tables Iceberg à partir d'un `graph_schema::Schema` reste une
+tâche à part, déjà notée dans `graph-schema`.
 - Trancher l'alignement du partition spec Iceberg avec le partitionnement
   logique du cluster (§4.1, encore `TBD` dans le spec).
 

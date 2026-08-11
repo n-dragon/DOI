@@ -59,22 +59,29 @@ tâche n'est "faite" que si elle compile et que son test passe.
   inconnu / opérateur incompatible échoue avec le bon `ValidationError`.
   *(dépend de D8)*
 
-### graph-storage
+### graph-storage — ✅ terminé (Phase 0)
 
-- **ST1** — Choisir et intégrer une crate Iceberg Rust (`apache/iceberg-rust`
+- ✅ **ST1** — Choisir et intégrer une crate Iceberg Rust (`apache/iceberg-rust`
   ou équivalent) ; définir la config de catalogue (local/filesystem pour
-  dev, candidat prod à trancher séparément).
-- **ST2** — Implémenter `latest_snapshot` pour une table donnée.
+  dev, candidat prod à trancher séparément). — crate `iceberg` v0.10 ;
+  dev = `MemoryCatalog` + `FileIO` filesystem local ; prod = `TBD`
+  (candidat : catalogue REST). Décisions détaillées dans le doc-comment
+  de `iceberg_reader.rs`.
+- ✅ **ST2** — Implémenter `latest_snapshot` pour une table donnée.
   *(dépend de ST1)*
-- **ST3** — Implémenter la désérialisation ligne Parquet → `PropertyValue`
-  pour chaque variante de `ScalarType` (§3.2). *(dépend de ST1)*
-- **ST4** — Implémenter `scan_nodes` (filtré par `label`) en s'appuyant sur
+- ✅ **ST3** — Implémenter la désérialisation ligne Parquet → `PropertyValue`
+  pour chaque variante de `ScalarType` (§3.2). *(dépend de ST1)* — via
+  Arrow (`to_arrow()` de la crate `iceberg` retourne des `RecordBatch`,
+  pas du Parquet brut).
+- ✅ **ST4** — Implémenter `scan_nodes` (filtré par `label`) en s'appuyant sur
   ST2/ST3. *(dépend de ST2, ST3)*
-- **ST5** — Implémenter `scan_edges` (filtré par `edge_type`).
+- ✅ **ST5** — Implémenter `scan_edges` (filtré par `edge_type`).
   *(dépend de ST2, ST3)*
-- **ST6** — Test d'intégration : écrire une table Iceberg de test (fixture
+- ✅ **ST6** — Test d'intégration : écrire une table Iceberg de test (fixture
   minimale), vérifier `scan_nodes`/`scan_edges` retournent les lignes
-  attendues. *(dépend de ST4, ST5)*
+  attendues. *(dépend de ST4, ST5)* — deux tests (nœuds et arêtes),
+  écriture réelle via l'API `writer` de la crate, catalogue mémoire +
+  FileIO local.
 
 ---
 

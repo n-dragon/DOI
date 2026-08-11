@@ -27,18 +27,22 @@ pub(crate) fn read_property_value(
     }
 
     match ty {
-        ScalarType::Int64 => downcast::<Int64Array>(array, ty)
-            .map(|a| PropertyValue::Int64(a.value(row))),
-        ScalarType::Float64 => downcast::<Float64Array>(array, ty)
-            .map(|a| PropertyValue::Float64(a.value(row))),
-        ScalarType::Bool => downcast::<BooleanArray>(array, ty)
-            .map(|a| PropertyValue::Bool(a.value(row))),
+        ScalarType::Int64 => {
+            downcast::<Int64Array>(array, ty).map(|a| PropertyValue::Int64(a.value(row)))
+        }
+        ScalarType::Float64 => {
+            downcast::<Float64Array>(array, ty).map(|a| PropertyValue::Float64(a.value(row)))
+        }
+        ScalarType::Bool => {
+            downcast::<BooleanArray>(array, ty).map(|a| PropertyValue::Bool(a.value(row)))
+        }
         ScalarType::String => downcast::<StringArray>(array, ty)
             .map(|a| PropertyValue::String(a.value(row).to_string())),
         ScalarType::Timestamp => downcast::<TimestampMicrosecondArray>(array, ty)
             .map(|a| PropertyValue::Timestamp(a.value(row))),
-        ScalarType::Bytes => downcast::<BinaryArray>(array, ty)
-            .map(|a| PropertyValue::Bytes(a.value(row).to_vec())),
+        ScalarType::Bytes => {
+            downcast::<BinaryArray>(array, ty).map(|a| PropertyValue::Bytes(a.value(row).to_vec()))
+        }
         ScalarType::List(elem_ty) => {
             let list = downcast::<ListArray>(array, ty)?;
             let elements = list.value(row);
@@ -58,10 +62,7 @@ pub(crate) fn read_property_value(
     }
 }
 
-fn downcast<'a, T: 'static>(
-    array: &'a ArrayRef,
-    ty: &ScalarType,
-) -> Result<&'a T, StorageError> {
+fn downcast<'a, T: 'static>(array: &'a ArrayRef, ty: &ScalarType) -> Result<&'a T, StorageError> {
     array.as_any().downcast_ref::<T>().ok_or_else(|| {
         StorageError::NonConformingRow(format!(
             "column declared as {ty:?} does not have the matching Arrow array type"
@@ -125,8 +126,12 @@ mod tests {
             _,
         >(vec![Some(vec![Some(1), Some(2), Some(3)])]));
 
-        match read_property_value(&list_array, 0, &ScalarType::List(Box::new(ScalarType::Int64)))
-            .unwrap()
+        match read_property_value(
+            &list_array,
+            0,
+            &ScalarType::List(Box::new(ScalarType::Int64)),
+        )
+        .unwrap()
         {
             PropertyValue::List(items) => {
                 assert_eq!(items.len(), 3);
