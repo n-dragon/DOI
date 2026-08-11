@@ -38,12 +38,18 @@ latence.
 | Exécution distribuée multi-partitions | **Scatter-gather** orchestré par le coordinateur, hop par hop (voir §7.4) |
 | Schéma | Déclaratif, versionné, IDL dédiée, migrations |
 | Observabilité | Métriques (Prometheus) + tracing distribué (OpenTelemetry) |
-| Sécurité / AuthN-AuthZ | **TBD** — non cadré, à traiter avant mise en production |
-| Cible de déploiement | **TBD** (candidat par défaut : Kubernetes, voir §10) |
-| Objectifs de performance | **TBD** — pas de cible chiffrée à ce stade |
+| Sécurité / AuthN-AuthZ | **Hors scope v1** — mis de côté délibérément (voir §1.3, §8.3) |
+| Cible de déploiement | Kubernetes (voir §10) |
+| Objectifs de performance | Pas de cible chiffrée pour l'instant — décision différée (voir §13) |
 
 ### 1.3 Non-objectifs (pour ce scope)
 
+- **AuthN/AuthZ** (§8.3) — mis de côté délibérément pour ce cadrage : pas
+  d'authentification client, pas d'autorisation fine, pas d'audit log en
+  v1. Décision de scope assumée (le scope est un moteur mono-tenant en
+  environnement de confiance), pas un TBD à trancher plus tard — à
+  reconsidérer explicitement si une mise en production hors environnement
+  de confiance est envisagée un jour.
 - Écritures transactionnelles temps réel multi-nœuds/arêtes avec garanties
   ACID fortes (le modèle retenu est snapshot/eventual consistency).
 - Algorithmes analytiques globaux lourds (PageRank, détection de communautés)
@@ -88,9 +94,13 @@ latence.
 
 Le graphe est un **property graph statiquement typé** :
 
-- Chaque nœud a **exactement un label primaire** (type), défini dans le
-  schéma. *(Question ouverte §13 : autoriser des labels secondaires /
-  multi-label ?)*
+- Chaque nœud a **exactement un label unique** (type), défini dans le
+  schéma. **Décision actée (§13) : pas de multi-label.** Le besoin de
+  représenter une entité sous plusieurs facettes (ex: une `Person` qui est
+  aussi un `Author`) se modélise via une **arête dédiée** entre deux nœuds
+  distincts (ex: `(p:Person)-[:IS_A]->(a:Author)`) plutôt que par des
+  labels multiples sur un même nœud — cohérent avec le modèle de pattern
+  matching du moteur (§7.1).
 - Chaque arête a **exactement un type de relation**, dirigé, défini dans le
   schéma, avec un label de nœud source et un label de nœud cible autorisés
   (contrainte de typage des extrémités).
@@ -291,9 +301,9 @@ schema graph_v1 {
 ### 6.3 Membership et découverte
 
 - Mécanisme de découverte des nœuds de partition par le(s) coordinateur(s) :
-  **TBD**. Candidats : registre externe (etcd/Consul), ou intégration native
-  Kubernetes (API des Pods/Endpoints) si la cible de déploiement K8s est
-  confirmée (§10).
+  **intégration native Kubernetes** (API des Pods/Endpoints, ou headless
+  Service) — décision alignée sur le choix de cible de déploiement (§10).
+  Pas de registre externe (etcd/Consul) dédié en v1.
 
 ---
 
@@ -442,6 +452,20 @@ scatter-gather correspond exactement à un round-trip coordinateur ↔
 partitions concernées, directement mesurable et traçable (span par hop dans
 la trace OpenTelemetry, §9.2).
 
+**Impact sur l'architecture (§6.1) :** cette décision fait du coordinateur
+un composant à part entière du **chemin de requête** (pas seulement un
+point d'entrée réseau) — chaque hop transite par lui, ce qui en fait
+potentiellement un point chaud à dimensionner/scaler indépendamment des
+nœuds de partition.
+
+Le modèle **message-passing pair-à-pair (style Pregel)** — où chaque nœud de
+partition relaierait directement les hops sortants vers la partition cible
+sans repasser par le coordinateur — reste documenté comme évolution possible
+de Phase 2+ si des traversées plus profondes ou un débit plus élevé
+l'exigeaient, mais n'est pas retenu pour v1 : la complexité additionnelle
+(terminaison distribuée, agrégation finale, observabilité) n'est pas
+justifiée pour les profondeurs bornées ciblées (`*1..3`, §7.1).
+
 ### 7.5 Streaming des résultats
 
 - Les résultats doivent pouvoir être **streamés** au client au fur et à
@@ -471,17 +495,21 @@ ajoutée ultérieurement pour les clients non-gRPC.
 | `GetIndexStatus() -> IndexStatus` | Métadonnées sur la génération d'index active : snapshot Iceberg épinglé, timestamp de dernier rebuild, nombre de nœuds/arêtes chargés. |
 | `HealthCheck() -> Health` | Liveness/readiness du nœud (coordinateur ou partition). |
 
-### 8.3 Authentification / Autorisation — **[TBD, non cadré]**
+### 8.3 Authentification / Autorisation — **hors scope v1 (décision actée)**
 
-Aucune décision prise sur ce point lors du cadrage. À trancher avant toute
-mise en production :
+Mis de côté délibérément pour ce cadrage plutôt que traité comme un TBD à
+lever avant implémentation : le moteur v1 est conçu pour un déploiement en
+environnement de confiance (réseau interne, pas d'exposition directe à des
+clients non fiables), sans couche AuthN/AuthZ dans le serveur lui-même.
+
+Resteraient à traiter si une mise en production hors environnement de
+confiance était envisagée (non planifié à ce stade, noté pour mémoire) :
 - Authentification des clients (mTLS, tokens, autre).
 - Autorisation fine (par label de nœud/type de relation, par propriété) —
   pertinent en contexte knowledge graph d'entreprise avec données
   sensibles.
 - Audit log des requêtes/mutations — non retenu explicitement dans le
-  cadrage (seule l'observabilité métriques/tracing a été actée, §9), à
-  reconsidérer si des exigences de conformité apparaissent.
+  cadrage (seule l'observabilité métriques/tracing a été actée, §9).
 
 ---
 
@@ -518,16 +546,21 @@ Métriques minimales à exposer par composant :
 
 ---
 
-## 10. Déploiement — **[TBD]**
+## 10. Déploiement
 
-Non tranché lors du cadrage. Candidat par défaut proposé : **Kubernetes**
-(StatefulSet pour les nœuds de partition — identité stable requise pour le
-mapping partition ↔ pod ; Deployment pour les coordinateurs si séparés du
-rôle partition, cf. §6.1), avec autoscaling horizontal pertinent côté
-coordinateurs uniquement (les partitions étant stateful et liées au
-partitionnement hash, un changement de réplicas implique un rebalancement,
-§6.2). Alternative plus simple (VMs/systemd) reste ouverte si la complexité
-opérationnelle de K8s n'est pas justifiée par l'échelle visée.
+**Décision actée : Kubernetes.**
+
+- **StatefulSet** pour les nœuds de partition — identité stable requise pour
+  le mapping partition ↔ pod (§6.2).
+- **Deployment** pour les coordinateurs si le rôle est séparé du rôle
+  partition (§6.1), avec autoscaling horizontal pertinent côté
+  coordinateurs uniquement — les partitions étant stateful et liées au
+  partitionnement hash, un changement de réplicas y implique un
+  rebalancement (§6.2), pas un simple scale-out.
+- Découverte des nœuds de partition (§6.3) : intégration native
+  Kubernetes (API des Pods/Endpoints ou headless Service), cohérente avec
+  ce choix de cible — plus besoin d'un registre externe (etcd/Consul)
+  dédié pour ce seul usage.
 
 ---
 
@@ -553,46 +586,55 @@ opérationnelle de K8s n'est pas justifiée par l'échelle visée.
 | **Phase 0 — Fondations** | Définition finale de l'IDL de schéma, mapping schéma → tables Iceberg, parser DSL (sous-ensemble k-hop + pattern matching simple). |
 | **Phase 1 — Single-node MVP** | Serveur mono-partition : index topologique + propriété en mémoire, rebuild complet périodique, API réseau (opérations §8.2), pas de distribution. Valide le modèle de données et le DSL de bout en bout. |
 | **Phase 2 — Distribution** | Partitionnement hash, rôle coordinateur, choix et implémentation du modèle d'exécution multi-partitions (§7.4), tracing distribué. |
-| **Phase 3 — Durcissement production** | AuthN/AuthZ (§8.3), stratégie de réplication/HA (§6.2), cible de déploiement finalisée (§10), objectifs de performance chiffrés et benchmarking. |
+| **Phase 3 — Durcissement production** | Stratégie de réplication/HA (§6.2), cible de déploiement finalisée (§10), objectifs de performance chiffrés et benchmarking. AuthN/AuthZ (§8.3) explicitement hors scope de la roadmap — à réintroduire seulement si un déploiement hors environnement de confiance est un jour requis. |
 | **Phase 4 — Extensions** | Index vectoriel (embeddings) pour recherche sémantique, index full-text, algorithmes analytiques (via délégation à un moteur externe ou implémentation native), rebuild incrémental de l'index. |
 
 ---
 
 ## 13. Questions ouvertes (à trancher avant/pendant l'implémentation)
 
-1. **Sécurité** (§8.3) : AuthN/AuthZ non cadrées, à définir avant toute
-   exposition réseau hors environnement de confiance.
-2. **Cible de déploiement** (§10) : Kubernetes vs alternative plus simple.
-3. **Objectifs de performance** : aucune cible chiffrée (latence p99,
-   throughput, taille de graphe maximale visée) — nécessaire pour
-   dimensionner le cluster et guider les choix d'implémentation (Phase 3).
-4. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
+1. **Génération de `node_id`** : généré par le pipeline d'ingestion vs
    dérivé d'une clé métier par hachage stable — impacte l'idempotence des
    réingestions.
-5. **Multi-label sur les nœuds** : le modèle v1 suppose un label primaire
-   unique par nœud ; à confirmer si le besoin knowledge graph réel exige des
-   labels multiples (ex: un nœud à la fois `Person` et `Author`).
-6. **Rebalancement du partitionnement** en cas de changement du nombre de
+2. **Rebalancement du partitionnement** en cas de changement du nombre de
    partitions.
-7. **Réplication / haute disponibilité** des nœuds de partition.
-8. **Migration de schéma incompatible** : processus détaillé non spécifié
+3. **Réplication / haute disponibilité** des nœuds de partition.
+4. **Migration de schéma incompatible** : processus détaillé non spécifié
    (§3.5).
-9. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
+5. **Index vectoriel / embeddings et full-text** : évoqués comme pertinents
    pour un knowledge graph mais explicitement repoussés hors du cadrage
    initial (indexation retenue = topologique + propriété uniquement) —
    à réévaluer en Phase 4.
-10. **Protocole de transport de l'API** (§8.1) : gRPC proposé par défaut,
-    non confirmé.
-11. **Partition spec Iceberg** (§4.1) : alignement du partitionnement
-    physique des tables avec le partitionnement logique du cluster, non
-    tranché.
-12. **Stratégie de join pour le pattern matching multi-jambes** (§7.4.1) :
-    hash-join en mémoire côté coordinateur vs join distribué — non bloquant
-    pour un premier plan d'exécution naïf, mais à approfondir.
-13. **Politique de tolérance aux pannes du scatter-gather** (§7.4.4) :
-    fail-fast vs résultats partiels en cas de timeout/échec d'une partition
-    pendant un hop ; nombre de retries et backoff.
-14. **Limites/backpressure de frontière** (§7.4.5) : taille max de
+6. **Protocole de transport de l'API** (§8.1) : gRPC proposé par défaut,
+   non confirmé.
+7. **Partition spec Iceberg** (§4.1) : alignement du partitionnement
+   physique des tables avec le partitionnement logique du cluster, non
+   tranché.
+8. **Stratégie de join pour le pattern matching multi-jambes** (§7.4.1) :
+   hash-join en mémoire côté coordinateur vs join distribué — non bloquant
+   pour un premier plan d'exécution naïf, mais à approfondir.
+9. **Politique de tolérance aux pannes du scatter-gather** (§7.4.4) :
+   fail-fast vs résultats partiels en cas de timeout/échec d'une partition
+   pendant un hop ; nombre de retries et backoff.
+10. **Limites/backpressure de frontière** (§7.4.5) : taille max de
     frontière par hop, budget mémoire par requête côté coordinateur, et
     lien avec une clause `LIMIT` du DSL (elle-même non encore spécifiée,
     §7.1).
+
+> **Résolu** : label unique par nœud, pas de multi-label — le besoin de
+> facettes multiples se modélise par une arête dédiée entre nœuds distincts.
+> Voir §3.1.
+>
+> **Résolu** : la cible de déploiement est actée sur Kubernetes — voir §10.
+>
+> **Résolu** : l'exécution distribuée multi-partitions est actée en
+> scatter-gather piloté par le coordinateur — voir §7.4.
+>
+> **Différé explicitement (pas un TBD bloquant)** : les objectifs de
+> performance chiffrés (latence p99, throughput, taille de graphe
+> maximale) ne sont volontairement pas fixés à ce stade du cadrage — ils
+> seront définis en Phase 3, une fois un premier MVP mesurable disponible
+> (benchmarking sur données réelles plutôt que cibles théoriques a priori).
+>
+> **Mis de côté (décision de scope, pas un TBD)** : la sécurité
+> (AuthN/AuthZ) est explicitement hors scope v1 — voir §1.3, §8.3.
