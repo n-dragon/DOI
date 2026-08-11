@@ -64,9 +64,23 @@ tâche n'est "faite" que si elle compile et que son test passe.
 - ✅ **ST1** — Choisir et intégrer une crate Iceberg Rust (`apache/iceberg-rust`
   ou équivalent) ; définir la config de catalogue (local/filesystem pour
   dev, candidat prod à trancher séparément). — crate `iceberg` v0.10 ;
-  dev = `MemoryCatalog` + `FileIO` filesystem local ; prod = `TBD`
-  (candidat : catalogue REST). Décisions détaillées dans le doc-comment
-  de `iceberg_reader.rs`.
+  dev = `iceberg-catalog-sql` + SQLite + `FileIO` filesystem local
+  (`graph_storage::open_sql_catalog`) ; prod = `TBD` (candidat : catalogue
+  REST). Décisions détaillées dans le doc-comment de `iceberg_reader.rs`
+  et de `catalog.rs`.
+
+  *(Révision post-PN/CO)* Le choix initial (`MemoryCatalog`) a un
+  registre de tables en mémoire, par processus — testé en le déployant
+  réellement (ingestion + `graph-partition-node` en process séparés), il
+  ne fonctionne pas dès que plus d'un processus est impliqué
+  (`NamespaceNotFound` malgré les fichiers Parquet présents sur disque).
+  Remplacé par `iceberg-catalog-sql` + SQLite (`SqlCatalogBuilder`,
+  auto-migration au premier `connect`) : même principe "zéro infra" pour
+  le dev, mais le registre est un fichier partagé entre processus. Testé
+  par un vrai déploiement multi-process (`ingest-cloud-cost` +
+  `graph-partition-node` + `graph-coordinator` + `query-client`, quatre
+  processus séparés, requête correcte de bout en bout) en plus d'un test
+  de régression dédié dans `graph-storage`.
 - ✅ **ST2** — Implémenter `latest_snapshot` pour une table donnée.
   *(dépend de ST1)*
 - ✅ **ST3** — Implémenter la désérialisation ligne Parquet → `PropertyValue`
@@ -156,18 +170,11 @@ tâche n'est "faite" que si elle compile et que son test passe.
   informationnel seulement en Phase 1, non encore utilisé pour filtrer —
   IX3 est un no-op tant que le partitionnement Phase 2 n'existe pas)*
 
-  ⚠️ **Limite connue, à lever avant tout déploiement multi-process réel** :
-  le catalogue dev choisi en ST1 (`MemoryCatalog`) a un registre de tables
-  **en mémoire, par processus**. Deux processus séparés pointant vers le
-  même répertoire `FileIO` ne voient PAS les mêmes tables : les fichiers
-  Parquet/metadata.json existent bien sur disque, mais un nouveau
-  processus démarre avec un catalogue vide et ne les retrouve pas
-  (`NamespaceNotFound`, vérifié empiriquement). Ingestion (par un job
-  externe) et `graph-partition-node` doivent donc tourner dans le même
-  process pour l'instant. Pour un vrai déploiement (VM, k8s), il faut
-  basculer vers un catalogue persistant (candidat déjà identifié en
-  ST1 : `iceberg-catalog-sql` + SQLite, ou un catalogue REST) — c'est la
-  suite logique avant toute tentative de déploiement multi-process.
+  Le catalogue dev est maintenant persistant (`iceberg-catalog-sql` +
+  SQLite, cf. révision ST1 ci-dessus) — `graph-partition-node` lit un
+  fichier SQLite partagé, pas un registre en mémoire propre au process.
+  Vérifié par un déploiement à quatre process séparés (`ingest-cloud-cost`,
+  `graph-partition-node`, `graph-coordinator`, `query-client`).
 
 ### bin/graph-coordinator (mode mono-partition) — ✅ terminé (Phase 1)
 

@@ -11,9 +11,15 @@ pub struct Config {
     /// Path to a `.graphschema` IDL file (§3.4) — same file every
     /// partition replica and the coordinator must agree on.
     pub schema_path: PathBuf,
-    /// Local-filesystem `FileIO` root for the dev Iceberg catalog (ST1's
-    /// documented dev setup).
+    /// Local-filesystem `FileIO` root where Iceberg table data lives
+    /// (ST1's dev setup).
     pub warehouse_path: PathBuf,
+    /// SQLite file backing the Iceberg catalog's table registry (ST1's
+    /// dev setup, revised: a persistent catalog, not `MemoryCatalog` -
+    /// the registry has to survive being a different process than
+    /// whatever ingested the data, which `MemoryCatalog`'s in-process
+    /// registry cannot).
+    pub catalog_db_path: PathBuf,
     pub namespace: String,
     pub partition_id: u32,
     /// Informational only in Phase 1 (mono-partition, IX3 is a no-op) -
@@ -41,6 +47,9 @@ impl Config {
         let warehouse_path = std::env::var("GRAPH_WAREHOUSE_PATH")
             .unwrap_or_else(|_| "./warehouse".to_string())
             .into();
+        let catalog_db_path = std::env::var("GRAPH_CATALOG_DB_PATH")
+            .unwrap_or_else(|_| "./catalog.sqlite".to_string())
+            .into();
         let namespace = std::env::var("GRAPH_NAMESPACE").unwrap_or_else(|_| "graph".to_string());
         let partition_id = parse_env("GRAPH_PARTITION_ID", 0)?;
         let n_partitions = parse_env("GRAPH_N_PARTITIONS", 1)?;
@@ -57,6 +66,7 @@ impl Config {
         Ok(Self {
             schema_path,
             warehouse_path,
+            catalog_db_path,
             namespace,
             partition_id,
             n_partitions,

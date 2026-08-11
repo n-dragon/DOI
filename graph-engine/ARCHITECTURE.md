@@ -6,13 +6,12 @@ requête de bout en bout. Toute décision citée ici (`§X.Y`) renvoie à la
 spec — ce document ne re-justifie pas les choix, il les fait correspondre
 à des unités de code.
 
-Statut : Phase 1 de la roadmap (spec §12) implémentée et testée de bout
-en bout — schéma, DSL, stockage Iceberg, index, exécution mono-partition,
-et les deux binaires réseau (`graph-coordinator`/`graph-partition-node`)
-communiquant en vrai gRPC (voir §5 plus bas). Reste : distribution
-multi-partitions et un catalogue Iceberg persistant pour un déploiement
-multi-process réel (Phase 2 — voir la limite connue documentée dans
-`IMPLEMENTATION.md`, section `bin/graph-partition-node`).
+Statut : Phase 1 de la roadmap (spec §12) implémentée, testée, et
+**déployée pour de vrai en multi-process** — schéma, DSL, stockage
+Iceberg (catalogue persistant), index, exécution mono-partition, et les
+deux binaires réseau (`graph-coordinator`/`graph-partition-node`)
+communiquant en vrai gRPC entre process séparés (voir §5 plus bas). Ne
+reste que la distribution multi-partitions (Phase 2).
 
 ## 1. Vue d'ensemble du workspace
 
@@ -110,8 +109,8 @@ tâche par tâche dans `TASKS.md` (tout ce qui y est coché `✅`) :
 - DSL complet (grammaire, parser, validateur statique) sur les deux
   formes de requête prioritaires du spec §7.1 (`graph-dsl`, D1-D9).
 - Intégration Apache Iceberg réelle (`apache/iceberg-rust`), lecture
-  seule, catalogue mémoire + FileIO local pour le dev (`graph-storage`,
-  ST1-ST6).
+  seule, catalogue SQLite persistant + FileIO local pour le dev
+  (`graph-storage`, ST1-ST6).
 - Index CSR + B-Tree construits depuis Iceberg, `GenerationHandle` avec
   swap atomique testé sous accès concurrent (`graph-index`, IX1-IX8).
 - Planificateur naïf + exécuteur local mono-partition, bout en bout sur
@@ -127,15 +126,12 @@ tâche par tâche dans `TASKS.md` (tout ce qui y est coché `✅`) :
   vérifié par un test d'intégration qui lance les deux et exécute la
   requête k-hop de bout en bout à travers eux (jalon MVP mono-partition,
   spec §12 Phase 1).
-
-⚠️ **Limite connue avant tout déploiement multi-process réel** : le
-catalogue Iceberg dev (`MemoryCatalog`, décision ST1) a un registre de
-tables en mémoire, propre à chaque processus — un `graph-partition-node`
-lancé séparément d'un job d'ingestion ne verra pas ses tables, même si
-les fichiers Parquet existent sur disque (vérifié empiriquement). Un
-déploiement réel (VM, cluster) demande de basculer vers un catalogue
-persistant (candidat déjà identifié en ST1 : `iceberg-catalog-sql` +
-SQLite, ou un catalogue REST) — détaillé dans `IMPLEMENTATION.md`.
+- Déploiement multi-process réel, vérifié pour de vrai (pas juste en
+  théorie) : `examples/ingest-cloud-cost` (ingestion),
+  `graph-partition-node`, `graph-coordinator` et `examples/query-client`
+  (CLI de requête) lancés comme quatre process séparés, partageant le
+  catalogue SQLite persistant (`graph_storage::open_sql_catalog`) —
+  requête correcte de bout en bout à travers les quatre.
 
 Reste à faire (Phase 2) :
 - Distribution multi-partitions (`graph-cluster`, `DistributedExecutor`,

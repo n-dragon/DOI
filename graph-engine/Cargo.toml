@@ -10,6 +10,8 @@ members = [
     "crates/graph-cluster",
     "crates/graph-observability",
     "examples/demo",
+    "examples/ingest-cloud-cost",
+    "examples/query-client",
     "bin/graph-partition-node",
     "bin/graph-coordinator",
 ]

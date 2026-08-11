@@ -10,6 +10,8 @@ thiserror.workspace = true
 futures.workspace = true
 iceberg = "0.10.1"
 arrow-array = "58"
+iceberg-catalog-sql = "0.10.1"
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "tls-rustls"] }
 
 [dev-dependencies]
 tokio = { workspace = true }

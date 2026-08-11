@@ -56,15 +56,27 @@ un snapshot donné".
   générique sur tout `iceberg::Catalog`.
 - `node_table_name`/`edge_table_name` : convention de nommage §4.1
   (`nodes_<label>`/`edges_<edge_type>`, en minuscules).
+- `open_sql_catalog` : construit le catalogue dev persistant (SQLite +
+  `FileIO` local), namespace créé s'il n'existe pas déjà.
 
 **Dépend de** : `graph-schema`. **Dépend d'elle** : `graph-index`.
 
 **Fait (ST1-ST6).** Crate Iceberg retenue : `apache/iceberg-rust` (crate
 `iceberg`, v0.10) — son API de scan `to_arrow()` retourne des
 `RecordBatch` Arrow, directement exploités par la désérialisation ST3.
-Catalogue dev : `iceberg::memory::MemoryCatalog` + `FileIO` filesystem
-local (métadonnées de catalogue en mémoire/éphémères, données de table
-réellement sur disque via `FileIO`, zéro infra supplémentaire).
+Catalogue dev : `iceberg-catalog-sql` (`SqlCatalog`) + SQLite + `FileIO`
+filesystem local, via `open_sql_catalog` (module `catalog.rs`) — zéro
+infra à faire tourner (juste un fichier), mais persistant : le registre
+de tables survit à la fin du process, contrairement au `MemoryCatalog`
+essayé initialement (revu après avoir constaté, en déployant réellement
+`graph-partition-node` en process séparé de l'ingestion, qu'un registre
+en mémoire ne peut pas être partagé entre deux process — `NamespaceNotFound`
+malgré des fichiers Parquet présents sur disque ; testé par un déploiement
+à quatre process réels — `ingest-cloud-cost` / `graph-partition-node` /
+`graph-coordinator` / `query-client` — et un test de régression dédié).
+`MemoryCatalog` reste utilisé là où le partage inter-process n'a pas de
+sens : `examples/demo` (un seul process, ingère et interroge dans le même
+run) et les tests d'intégration (ST6, CO4).
 Catalogue prod : volontairement `TBD` (même posture que le
 partitionnement physique déjà `TBD` en §4.1) — candidat : catalogue REST
 devant un service managé (Glue/Polaris/Unity/Nessie), à trancher au
@@ -352,18 +364,41 @@ sur de vrais sockets TCP loopback, connectés par de vrais clients gRPC
 générés — exécute la requête k-hop exemple du spec §7.1 de bout en bout.
 **C'est le jalon MVP mono-partition (spec §12 Phase 1).**
 
-**⚠️ Limite connue avant tout déploiement multi-process réel.** Le
-catalogue dev (`MemoryCatalog`, décision ST1) a un registre de tables **en
-mémoire, par processus** : deux processus séparés pointant vers le même
-répertoire `FileIO` ne voient pas les mêmes tables (vérifié
-empiriquement — `NamespaceNotFound` malgré des fichiers Parquet présents
-sur disque). Ingestion et `graph-partition-node` doivent donc tourner
-dans le même process pour l'instant (voir `examples/demo`, ou CO4/ce
-test). Basculer vers un catalogue persistant (candidat déjà identifié en
-ST1 : `iceberg-catalog-sql` + SQLite pour rester "zéro infra" en dev, ou
-un catalogue REST) est un prérequis pour tout déploiement où
-`graph-partition-node` tourne en process séparé de l'ingestion —
-typiquement, tout déploiement sur une VM ou en cluster.
+**Déploiement multi-process, vérifié réellement.** Le catalogue dev est
+`iceberg-catalog-sql` + SQLite (`open_sql_catalog`, révision de ST1) — un
+fichier partagé, pas un registre en mémoire propre au process. Vérifié
+en lançant quatre process séparés pour de vrai : `ingest-cloud-cost`
+(ingestion), `graph-partition-node`, `graph-coordinator`, `query-client`
+(un CLI minimal pour interroger un coordinateur en tournant) — la requête
+traverse les quatre et renvoie le bon résultat. `examples/demo` continue
+d'utiliser `MemoryCatalog` : il ingère et interroge dans le même process,
+où ça reste le choix le plus simple.
+
+---
+
+## examples/ — démonstration et outillage
+
+Trois petits binaires, hors du moteur lui-même, pour le prendre en main :
+
+- **`examples/demo`** (`graph-engine-demo`) — tout en un seul process :
+  ingère un petit graphe Cloud Cost Management, construit l'index,
+  exécute la requête exemple, affiche le résultat. Utilise `MemoryCatalog`
+  (pas besoin de partage inter-process ici). `cargo run -p graph-engine-demo`.
+- **`examples/ingest-cloud-cost`** — le même jeu de données que le démo,
+  mais écrit dans le catalogue SQLite persistant, en tant que process
+  autonome (le rôle "pipeline d'ingestion externe" du spec §4.3, joué
+  pour de vrai plutôt que replié dans le process du démo).
+  `cargo run -p ingest-cloud-cost`.
+- **`examples/query-client`** — CLI minimal pour interroger un
+  `graph-coordinator` en cours d'exécution (`GRAPH_COORDINATOR_ADDR`,
+  requête DSL en argument), utile pour vérifier un déploiement sans
+  relire des assertions de test. `cargo run -p query-client -- '<DSL>'`.
+
+Séquence pour un vrai déploiement multi-process (vérifiée) :
+`ingest-cloud-cost` → `graph-partition-node` → `graph-coordinator` →
+`query-client`, chacun un process séparé, `GRAPH_CATALOG_DB_PATH`/
+`GRAPH_WAREHOUSE_PATH`/`GRAPH_NAMESPACE` identiques entre l'ingestion et
+`graph-partition-node`.
 
 ---
 

@@ -6,9 +6,11 @@
 //! above this layer (graph-index) treats storage as an immutable, pinned
 //! view (§4.2).
 
+mod catalog;
 mod iceberg_reader;
 mod property_value;
 
+pub use catalog::open_sql_catalog;
 pub use iceberg_reader::{edge_table_name, node_table_name, IcebergCatalogReader};
 
 use async_trait::async_trait;
