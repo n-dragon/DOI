@@ -1,76 +1,82 @@
 <title>Cloud Cost Management, as a graph</title>
 <style>
   :root {
-    --bg: #f3f6fa;
+    --bg: #ffffff;
     --surface: #ffffff;
-    --surface-2: #e8edf4;
-    --border: #d6dee8;
-    --ink: #16202b;
-    --ink-muted: #5b6b7d;
-    --ink-faint: #8a97a8;
+    --surface-2: #f5f2fb;
+    --border: #e3ddf0;
+    --ink: #18132b;
+    --ink-muted: #635c7c;
+    --ink-faint: #948da8;
     --accent-cost: #a8690b;
-    --accent-flow: #1c6ea4;
-    --node-account: #5c6b85;
-    --node-vpc: #17828c;
-    --node-subnet: #1c9a86;
-    --node-compute: #2a6fbd;
-    --node-storage: #6a56c9;
-    --node-rds: #1f9a73;
+    --accent-flow: #632ca6;
+    --node-account: #4b4768;
+    --node-vpc: #1a9fae;
+    --node-subnet: #17a398;
+    --node-compute: #3f7fe0;
+    --node-storage: #c2469a;
+    --node-rds: #21a06f;
     --node-cost: #a8690b;
-    --excluded-fill: #dbe1e9;
-    --excluded-stroke: #aab5c4;
-    --excluded-text: #8b95a3;
-    --result-ring: #c9860f;
-    --shadow: 0 1px 2px rgba(20, 30, 45, 0.06), 0 8px 24px rgba(20, 30, 45, 0.06);
+    --excluded-fill: #f1eef8;
+    --excluded-stroke: #d3cbe6;
+    --excluded-text: #a79cc2;
+    --result-ring: #632ca6;
+    --danger: #a3244f;
+    --danger-bg: #fbe7ee;
+    --shadow: 0 1px 2px rgba(40, 20, 70, 0.06), 0 8px 24px rgba(40, 20, 70, 0.07);
   }
 
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #0b0e14;
-      --surface: #121722;
-      --surface-2: #171f2c;
-      --border: #262f40;
-      --ink: #e8ecf3;
-      --ink-muted: #93a1b5;
-      --ink-faint: #67748a;
+      --bg: #120e1f;
+      --surface: #1c1730;
+      --surface-2: #251f3d;
+      --border: #372c56;
+      --ink: #f1edfb;
+      --ink-muted: #b3a8d1;
+      --ink-faint: #79709a;
       --accent-cost: #e8a33d;
-      --accent-flow: #55b6e6;
-      --node-account: #8592ac;
-      --node-vpc: #2fb4b0;
-      --node-subnet: #35c2a8;
-      --node-compute: #55b6e6;
-      --node-storage: #9b8cf2;
-      --node-rds: #3fbf8f;
+      --accent-flow: #9b5cff;
+      --node-account: #918bb8;
+      --node-vpc: #3fd0d9;
+      --node-subnet: #35d2ae;
+      --node-compute: #5b9dff;
+      --node-storage: #ef7cc0;
+      --node-rds: #3fd08f;
       --node-cost: #e8a33d;
-      --excluded-fill: #1a2130;
-      --excluded-stroke: #37415a;
-      --excluded-text: #5c6a82;
-      --result-ring: #e8a33d;
+      --excluded-fill: #201a34;
+      --excluded-stroke: #423767;
+      --excluded-text: #6a5f8c;
+      --result-ring: #b47bff;
+      --danger: #ff7aa2;
+      --danger-bg: #3a1626;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
     }
   }
 
   :root[data-theme="dark"] {
-    --bg: #0b0e14;
-    --surface: #121722;
-    --surface-2: #171f2c;
-    --border: #262f40;
-    --ink: #e8ecf3;
-    --ink-muted: #93a1b5;
-    --ink-faint: #67748a;
+    --bg: #120e1f;
+    --surface: #1c1730;
+    --surface-2: #251f3d;
+    --border: #372c56;
+    --ink: #f1edfb;
+    --ink-muted: #b3a8d1;
+    --ink-faint: #79709a;
     --accent-cost: #e8a33d;
-    --accent-flow: #55b6e6;
-    --node-account: #8592ac;
-    --node-vpc: #2fb4b0;
-    --node-subnet: #35c2a8;
-    --node-compute: #55b6e6;
-    --node-storage: #9b8cf2;
-    --node-rds: #3fbf8f;
+    --accent-flow: #9b5cff;
+    --node-account: #918bb8;
+    --node-vpc: #3fd0d9;
+    --node-subnet: #35d2ae;
+    --node-compute: #5b9dff;
+    --node-storage: #ef7cc0;
+    --node-rds: #3fd08f;
     --node-cost: #e8a33d;
-    --excluded-fill: #1a2130;
-    --excluded-stroke: #37415a;
-    --excluded-text: #5c6a82;
-    --result-ring: #e8a33d;
+    --excluded-fill: #201a34;
+    --excluded-stroke: #423767;
+    --excluded-text: #6a5f8c;
+    --result-ring: #b47bff;
+    --danger: #ff7aa2;
+    --danger-bg: #3a1626;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
   }
 
@@ -109,14 +115,15 @@
     font-size: 12px;
     letter-spacing: 0.09em;
     text-transform: uppercase;
-    color: var(--ink-faint);
+    color: var(--accent-flow);
+    font-weight: 600;
   }
 
   h1 {
-    font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
     font-size: clamp(26px, 3.6vw, 36px);
-    font-weight: 700;
-    letter-spacing: -0.01em;
+    font-weight: 800;
+    letter-spacing: -0.015em;
     margin: 0;
     text-wrap: balance;
   }
@@ -185,12 +192,11 @@
   .toggle button + button { border-left: 1px solid var(--border); }
 
   .toggle button[aria-pressed="true"] {
-    background: var(--ink);
-    color: var(--surface);
+    background: var(--accent-flow);
+    color: #fff;
   }
 
   .toggle button:focus-visible,
-  .icon-btn:focus-visible,
   a:focus-visible {
     outline: 2px solid var(--accent-flow);
     outline-offset: 2px;
@@ -256,8 +262,8 @@
   }
   body.mode-query .node[data-status="included"] .badge { opacity: 1; }
 
-  body.mode-query .edge[data-hop] { stroke: var(--accent-flow); stroke-width: 2.2; }
-  body.mode-query .edge[data-hop="4"] { stroke: var(--excluded-stroke); stroke-dasharray: 2 4; }
+  body.mode-query .edge.edge--in-range { stroke: var(--accent-flow); stroke-width: 2.2; }
+  body.mode-query .edge.edge--out-of-range { stroke: var(--excluded-stroke); stroke-dasharray: 2 4; }
 
   body.mode-query .edge--cost[data-result="included"] { stroke: var(--result-ring); stroke-width: 2; }
   body.mode-query .edge--cost[data-result="excluded"] { stroke: var(--excluded-stroke); }
@@ -273,27 +279,74 @@
 
   .panel { padding: 16px 18px; }
 
-  .panel h2 {
+  .panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .panel h2, .panel-head h2 {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--ink-faint);
-    margin: 0 0 10px;
-    font-weight: 600;
+    margin: 0;
+    font-weight: 700;
   }
 
-  .query-block {
+  .panel-head-hint {
+    font-size: 10.5px;
+    color: var(--ink-faint);
+    text-align: right;
+  }
+
+  .query-editor {
+    width: 100%;
+    min-height: 132px;
+    resize: vertical;
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 12px 14px;
     font-size: 12.5px;
-    white-space: pre;
-    overflow-x: auto;
+    line-height: 1.6;
     color: var(--ink);
+    outline: none;
   }
-  .query-block .kw { color: var(--accent-flow); font-weight: 600; }
-  .query-block .fn { color: var(--accent-cost); font-weight: 600; }
+  .query-editor:focus-visible {
+    outline: 2px solid var(--accent-flow);
+    outline-offset: 2px;
+  }
+
+  .query-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+  .btn {
+    appearance: none;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    padding: 8px 14px;
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  .btn-primary { background: var(--accent-flow); color: #fff; }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-ghost { background: transparent; border-color: var(--border); color: var(--ink-muted); }
+  .btn-ghost:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .btn:focus-visible { outline: 2px solid var(--accent-flow); outline-offset: 2px; }
+
+  .query-error {
+    margin: 10px 0 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--danger-bg);
+    color: var(--danger);
+    font-size: 12px;
+    font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
 
   .legend { display: flex; flex-direction: column; gap: 8px; }
   .legend-row { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--ink-muted); }
@@ -358,10 +411,12 @@
     <h1>Cloud Cost Management, as a graph</h1>
     <p class="lede">
       A cloud-resource inventory joined to a separate billing dataset — the join is a real
-      edge in the graph, not a runtime SQL join. This is the exact dataset and query the
+      edge in the graph, not a runtime SQL join. This is the exact dataset and query shape the
       engine's own demo pipeline computes (<code class="mono">ingest-cloud-cost</code> →
       <code class="mono">graph-partition-node</code> → <code class="mono">graph-coordinator</code> →
-      <code class="mono">query-client</code>), captured here as a static walkthrough.
+      <code class="mono">query-client</code>). Edit the query on the right and run it — the
+      highlighting below is recomputed against this page's embedded copy of the dataset, not
+      decorative.
     </p>
   </header>
 
@@ -375,7 +430,7 @@
         </div>
       </div>
 
-      <svg class="graph" viewBox="0 0 1180 700" role="img" aria-label="Graph of a cloud account's resource hierarchy joined to its cost records, with the example query's traversal and results highlighted in query mode.">
+      <svg class="graph" viewBox="0 0 1180 700" role="img" aria-label="Graph of a cloud account's resource hierarchy joined to its cost records, with the current query's traversal and results highlighted in query mode.">
         <defs>
           <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L8,4 L0,8 z" fill="var(--ink-faint)"></path>
@@ -395,12 +450,12 @@
 
         <!-- cost edges (HAS_COST) -->
         <g>
-          <line class="edge edge--cost" data-result="excluded" x1="255" y1="252" x2="940" y2="168"></line>
-          <line class="edge edge--cost" data-result="included" x1="165" y1="360" x2="940" y2="248"></line>
-          <line class="edge edge--cost" data-result="excluded" x1="365" y1="360" x2="940" y2="328"></line>
-          <line class="edge edge--cost" data-result="excluded" x1="170" y1="460" x2="940" y2="408"></line>
-          <line class="edge edge--cost" data-result="excluded" x1="170" y1="560" x2="940" y2="488"></line>
-          <line class="edge edge--cost" data-result="included" x1="595" y1="252" x2="940" y2="568"></line>
+          <line class="edge edge--cost" data-id="subnet" data-result="excluded" x1="255" y1="252" x2="940" y2="168"></line>
+          <line class="edge edge--cost" data-id="i1" data-result="included" x1="165" y1="360" x2="940" y2="248"></line>
+          <line class="edge edge--cost" data-id="i2" data-result="excluded" x1="365" y1="360" x2="940" y2="328"></line>
+          <line class="edge edge--cost" data-id="vol" data-result="excluded" x1="170" y1="460" x2="940" y2="408"></line>
+          <line class="edge edge--cost" data-id="snap" data-result="excluded" x1="170" y1="560" x2="940" y2="488"></line>
+          <line class="edge edge--cost" data-id="rds" data-result="included" x1="595" y1="252" x2="940" y2="568"></line>
         </g>
 
         <!-- resource hierarchy nodes -->
@@ -422,7 +477,8 @@
           <rect x="130" y="228" width="150" height="40" rx="8" fill="var(--node-subnet)" stroke="var(--node-subnet)"></rect>
           <text class="label" x="205" y="245" text-anchor="middle">subnet-prod-a</text>
           <text class="sub mono" x="205" y="259" text-anchor="middle">Resource · subnet</text>
-          <text class="why" x="205" y="282" text-anchor="middle">$5/mo — below $100</text>
+          <text class="why" x="205" y="282" text-anchor="middle"></text>
+          <text class="badge mono" x="205" y="282" text-anchor="middle" fill="var(--accent-cost)"></text>
           <title>Resource · subnet-prod-a · type subnet · us-east-1 · 1 hop from vpc-prod</title>
         </g>
 
@@ -430,7 +486,8 @@
           <rect x="425" y="228" width="150" height="40" rx="8" fill="var(--node-rds)" stroke="var(--node-rds)"></rect>
           <text class="label" x="500" y="245" text-anchor="middle">rds-orders-db</text>
           <text class="sub mono" x="500" y="259" text-anchor="middle">Resource · rds_instance</text>
-          <text class="badge mono" x="500" y="282" text-anchor="middle" fill="var(--accent-cost)">$340/mo · kept</text>
+          <text class="why" x="500" y="282" text-anchor="middle"></text>
+          <text class="badge mono" x="500" y="282" text-anchor="middle" fill="var(--accent-cost)"></text>
           <title>Resource · rds-orders-db · type rds_instance · us-east-1 · 1 hop from vpc-prod</title>
         </g>
 
@@ -438,7 +495,8 @@
           <rect x="0" y="328" width="170" height="40" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
           <text class="label" x="85" y="345" text-anchor="middle">i-checkout-api-1</text>
           <text class="sub mono" x="85" y="359" text-anchor="middle">Resource · ec2_instance</text>
-          <text class="badge mono" x="85" y="382" text-anchor="middle" fill="var(--accent-cost)">$245/mo · kept</text>
+          <text class="why" x="85" y="382" text-anchor="middle"></text>
+          <text class="badge mono" x="85" y="382" text-anchor="middle" fill="var(--accent-cost)"></text>
           <title>Resource · i-checkout-api-1 · type ec2_instance · us-east-1 · 2 hops from vpc-prod</title>
         </g>
 
@@ -446,7 +504,8 @@
           <rect x="195" y="328" width="170" height="40" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
           <text class="label" x="280" y="345" text-anchor="middle">i-checkout-api-2</text>
           <text class="sub mono" x="280" y="359" text-anchor="middle">Resource · ec2_instance</text>
-          <text class="why" x="280" y="382" text-anchor="middle">$40/mo — below $100</text>
+          <text class="why" x="280" y="382" text-anchor="middle"></text>
+          <text class="badge mono" x="280" y="382" text-anchor="middle" fill="var(--accent-cost)"></text>
           <title>Resource · i-checkout-api-2 · type ec2_instance · us-east-1 · 2 hops from vpc-prod</title>
         </g>
 
@@ -454,7 +513,8 @@
           <rect x="-10" y="428" width="180" height="40" rx="8" fill="var(--node-storage)" stroke="var(--node-storage)"></rect>
           <text class="label" x="80" y="445" text-anchor="middle">vol-checkout-api-1</text>
           <text class="sub mono" x="80" y="459" text-anchor="middle">Resource · ebs_volume</text>
-          <text class="why" x="80" y="482" text-anchor="middle">$12/mo — below $100</text>
+          <text class="why" x="80" y="482" text-anchor="middle"></text>
+          <text class="badge mono" x="80" y="482" text-anchor="middle" fill="var(--accent-cost)"></text>
           <title>Resource · vol-checkout-api-1 · type ebs_volume · us-east-1 · 3 hops from vpc-prod</title>
         </g>
 
@@ -462,8 +522,9 @@
           <rect x="-10" y="528" width="180" height="40" rx="8" fill="var(--node-storage)" stroke="var(--node-storage)"></rect>
           <text class="label" x="80" y="545" text-anchor="middle">snap-checkout-api-1</text>
           <text class="sub mono" x="80" y="559" text-anchor="middle">Resource · ebs_snapshot</text>
-          <text class="why" x="80" y="582" text-anchor="middle">$500/mo, but 4 hops — outside *1..3</text>
-          <title>Resource · snap-checkout-api-1 · type ebs_snapshot · us-east-1 · 4 hops from vpc-prod (outside the query's *1..3 range)</title>
+          <text class="why" x="80" y="582" text-anchor="middle"></text>
+          <text class="badge mono" x="80" y="582" text-anchor="middle" fill="var(--accent-cost)"></text>
+          <title>Resource · snap-checkout-api-1 · type ebs_snapshot · us-east-1 · 4 hops from vpc-prod</title>
         </g>
 
         <!-- cost ledger -->
@@ -507,8 +568,27 @@
 
     <div class="side">
       <div class="card panel">
-        <h2>Query</h2>
-        <div class="query-block mono" id="query-text"></div>
+        <div class="panel-head">
+          <h2>Query</h2>
+          <span class="panel-head-hint">edit &amp; run</span>
+        </div>
+        <textarea id="query-input" class="query-editor mono" spellcheck="false" autocomplete="off" rows="7">MATCH (a:CloudAccount {account_id: "123456789012"})
+  -[:OWNS]-> (vpc:Resource)
+  -[:CONTAINS*1..3]-> (r:Resource)
+  -[:HAS_COST]-> (c:CostRecord)
+WHERE c.amount_usd > 100
+RETURN r</textarea>
+        <div class="query-actions">
+          <button type="button" id="btn-run" class="btn btn-primary">Run query</button>
+          <button type="button" id="btn-reset" class="btn btn-ghost">Reset</button>
+        </div>
+        <p class="query-error" id="query-error" role="alert" hidden></p>
+        <p class="empty-hint" style="margin-top:10px;">
+          Only the <code class="mono">CONTAINS*min..max</code> hop range and the
+          <code class="mono">WHERE c.amount_usd</code> threshold are evaluated live against
+          this page's embedded dataset — the rest of the pattern is fixed to match
+          <code class="mono">examples/ingest-cloud-cost</code>.
+        </p>
       </div>
 
       <div class="card panel" id="results-panel">
@@ -543,39 +623,94 @@
 
   <footer class="page">
     <span>Rust · Apache Iceberg · custom traversal DSL</span>
-    <span>graph-engine — knowledge graph for referential metadata</span>
+    <span>Palette is a homage to Datadog's brand purple (#632CA6 / #8000FF) — not an official Datadog asset</span>
   </footer>
 </div>
 
 <script>
 (function () {
-  var DSL = [
-    ['kw', 'MATCH'], ['t', ' (a:CloudAccount {account_id: '], ['fn', '"123456789012"'], ['t', '})'],
-    ['t', '\n  -[:'], ['fn', 'OWNS'], ['t', ']-> (vpc:Resource)'],
-    ['t', '\n  -[:'], ['fn', 'CONTAINS'], ['t', '*1..3]-> (r:Resource)'],
-    ['t', '\n  -[:'], ['fn', 'HAS_COST'], ['t', ']-> (c:CostRecord)'],
-    ['t', '\n'], ['kw', 'WHERE'], ['t', ' c.amount_usd > '], ['fn', '100'],
-    ['t', '\n'], ['kw', 'RETURN'], ['t', ' r']
+  var RESOURCES = [
+    { id: 'subnet', name: 'subnet-prod-a', hops: 1, cost: 5 },
+    { id: 'rds', name: 'rds-orders-db', hops: 1, cost: 340 },
+    { id: 'i1', name: 'i-checkout-api-1', hops: 2, cost: 245 },
+    { id: 'i2', name: 'i-checkout-api-2', hops: 2, cost: 40 },
+    { id: 'vol', name: 'vol-checkout-api-1', hops: 3, cost: 12 },
+    { id: 'snap', name: 'snap-checkout-api-1', hops: 4, cost: 500 }
   ];
-  var q = document.getElementById('query-text');
-  DSL.forEach(function (part) {
-    var span = document.createElement('span');
-    if (part[0] === 'kw') span.className = 'kw';
-    if (part[0] === 'fn') span.className = 'fn';
-    span.textContent = part[1];
-    q.appendChild(span);
-  });
 
-  var RESULTS = [
-    { name: 'rds-orders-db', amount: 340 },
-    { name: 'i-checkout-api-1', amount: 245 }
-  ];
-  var EXCLUDED = [
-    { name: 'subnet-prod-a', why: '$5/mo — below the $100 threshold' },
-    { name: 'i-checkout-api-2', why: '$40/mo — below the $100 threshold' },
-    { name: 'vol-checkout-api-1', why: '$12/mo — below the $100 threshold' },
-    { name: 'snap-checkout-api-1', why: '$500/mo, but 4 hops from vpc-prod — outside *1..3' }
-  ];
+  var OP_LABEL = { '>': '>', '<': '<', '>=': '>=', '<=': '<=', '=': '=' };
+
+  function compare(value, op, threshold) {
+    switch (op) {
+      case '>': return value > threshold;
+      case '<': return value < threshold;
+      case '>=': return value >= threshold;
+      case '<=': return value <= threshold;
+      case '=': return value === threshold;
+      default: return false;
+    }
+  }
+
+  function parseQuery(text) {
+    var hopMatch = text.match(/CONTAINS\s*\*\s*(\d+)\s*\.\.\s*(\d+)\s*\]/);
+    if (!hopMatch) {
+      throw new Error('Could not find a hop range like CONTAINS*1..3] in the pattern.');
+    }
+    var minHop = parseInt(hopMatch[1], 10);
+    var maxHop = parseInt(hopMatch[2], 10);
+    if (maxHop < minHop) {
+      throw new Error('The hop range max (' + maxHop + ') is smaller than its min (' + minHop + ').');
+    }
+    if (maxHop > 20) {
+      throw new Error('Hop range max is capped at 20 for this demo dataset.');
+    }
+
+    var thresholdMatch = text.match(/c\.amount_usd\s*(>=|<=|==|>|<|=)\s*(\d+(?:\.\d+)?)/);
+    if (!thresholdMatch) {
+      throw new Error('Could not find a WHERE c.amount_usd comparison (e.g. WHERE c.amount_usd > 100).');
+    }
+    var op = thresholdMatch[1] === '==' ? '=' : thresholdMatch[1];
+    var threshold = parseFloat(thresholdMatch[2]);
+
+    return { minHop: minHop, maxHop: maxHop, op: op, threshold: threshold };
+  }
+
+  function evaluate(params) {
+    return RESOURCES.map(function (r) {
+      var inRange = r.hops >= params.minHop && r.hops <= params.maxHop;
+      var passesFilter = compare(r.cost, params.op, params.threshold);
+      var included = inRange && passesFilter;
+      var reason = null;
+      if (!included) {
+        reason = !inRange
+          ? (r.hops + ' hop' + (r.hops === 1 ? '' : 's') + ' — outside *' + params.minHop + '..' + params.maxHop)
+          : ('$' + r.cost + '/mo — fails amount_usd ' + OP_LABEL[params.op] + ' ' + params.threshold);
+      }
+      return { id: r.id, name: r.name, hops: r.hops, cost: r.cost, included: included, reason: reason };
+    });
+  }
+
+  function applyToSvg(evalResults, params) {
+    evalResults.forEach(function (r) {
+      var node = document.querySelector('.node[data-id="' + r.id + '"]');
+      if (!node) return;
+      node.setAttribute('data-status', r.included ? 'included' : 'excluded');
+      var badge = node.querySelector('.badge');
+      var why = node.querySelector('.why');
+      if (badge) badge.textContent = r.included ? ('$' + r.cost + '/mo · kept') : '';
+      if (why) why.textContent = r.included ? '' : r.reason;
+
+      var costEdge = document.querySelector('.edge--cost[data-id="' + r.id + '"]');
+      if (costEdge) costEdge.setAttribute('data-result', r.included ? 'included' : 'excluded');
+    });
+
+    document.querySelectorAll('.edge[data-hop]').forEach(function (edge) {
+      var hop = parseInt(edge.getAttribute('data-hop'), 10);
+      var inRange = hop === 0 || hop <= params.maxHop;
+      edge.classList.toggle('edge--in-range', inRange);
+      edge.classList.toggle('edge--out-of-range', !inRange);
+    });
+  }
 
   function renderFull() {
     document.getElementById('results-title').textContent = 'Dataset';
@@ -589,34 +724,70 @@
       rows.map(function (r) {
         return '<div class="stat-row"><span>' + r[0] + '</span><span class="n mono">' + r[1] + '</span></div>';
       }).join('') +
-      '<p class="empty-hint" style="margin-top:10px;">Switch to “query result” to see the traversal narrow this down to two resources.</p>';
+      '<p class="empty-hint" style="margin-top:10px;">Switch to “query result”, or run the query on the right, to see the traversal narrow this down.</p>';
   }
 
-  function renderQuery() {
-    document.getElementById('results-title').textContent = 'Result — 2 rows';
-    var html = '<ul class="result-list">' + RESULTS.map(function (r) {
-      return '<li><span>' + r.name + '</span><span class="amt mono">$' + r.amount + '/mo</span></li>';
-    }).join('') + '</ul>';
-    html += '<p class="empty-hint" style="margin-top:12px; margin-bottom:6px;">Excluded, and why:</p>';
-    html += '<ul class="result-list">' + EXCLUDED.map(function (r) {
-      return '<li style="border-left-color: var(--excluded-stroke);"><span>' + r.name + '</span><span class="mono" style="color:var(--ink-faint); font-size:11.5px;">' + r.why + '</span></li>';
-    }).join('') + '</ul>';
+  function renderQuery(evalResults) {
+    var included = evalResults.filter(function (r) { return r.included; });
+    var excluded = evalResults.filter(function (r) { return !r.included; });
+
+    document.getElementById('results-title').textContent = 'Result — ' + included.length + ' row' + (included.length === 1 ? '' : 's');
+    var html;
+    if (included.length) {
+      html = '<ul class="result-list">' + included.map(function (r) {
+        return '<li><span>' + r.name + '</span><span class="amt mono">$' + r.cost + '/mo</span></li>';
+      }).join('') + '</ul>';
+    } else {
+      html = '<p class="empty-hint">No resources match this query.</p>';
+    }
+    if (excluded.length) {
+      html += '<p class="empty-hint" style="margin-top:12px; margin-bottom:6px;">Excluded, and why:</p>';
+      html += '<ul class="result-list">' + excluded.map(function (r) {
+        return '<li style="border-left-color: var(--excluded-stroke);"><span>' + r.name + '</span><span class="mono" style="color:var(--ink-faint); font-size:11.5px;">' + r.reason + '</span></li>';
+      }).join('') + '</ul>';
+    }
     document.getElementById('results-body').innerHTML = html;
   }
 
   var btnFull = document.getElementById('btn-full');
   var btnQuery = document.getElementById('btn-query');
+  var input = document.getElementById('query-input');
+  var errorBox = document.getElementById('query-error');
+  var defaultQueryText = input.value;
+  var lastEvalResults = null;
 
   function setMode(query) {
     document.body.classList.toggle('mode-query', query);
     btnFull.setAttribute('aria-pressed', String(!query));
     btnQuery.setAttribute('aria-pressed', String(query));
-    if (query) renderQuery(); else renderFull();
+    if (query && lastEvalResults) renderQuery(lastEvalResults); else if (!query) renderFull();
+  }
+
+  function runQuery(switchToQueryMode) {
+    var params;
+    try {
+      params = parseQuery(input.value);
+    } catch (err) {
+      errorBox.textContent = err.message;
+      errorBox.hidden = false;
+      return;
+    }
+    errorBox.hidden = true;
+    lastEvalResults = evaluate(params);
+    applyToSvg(lastEvalResults, params);
+    if (switchToQueryMode) setMode(true);
+    else if (document.body.classList.contains('mode-query')) renderQuery(lastEvalResults);
   }
 
   btnFull.addEventListener('click', function () { setMode(false); });
   btnQuery.addEventListener('click', function () { setMode(true); });
+  document.getElementById('btn-run').addEventListener('click', function () { runQuery(true); });
+  document.getElementById('btn-reset').addEventListener('click', function () {
+    input.value = defaultQueryText;
+    runQuery(true);
+  });
 
   renderFull();
+  runQuery(false);
 })();
 </script>
