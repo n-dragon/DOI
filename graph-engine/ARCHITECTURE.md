@@ -6,9 +6,11 @@ requête de bout en bout. Toute décision citée ici (`§X.Y`) renvoie à la
 spec — ce document ne re-justifie pas les choix, il les fait correspondre
 à des unités de code.
 
-Statut : squelette d'architecture (compile, `cargo check --workspace`
-passe), logique métier non implémentée — c'est la Phase 0/1 de la roadmap
-(spec §12) qui vient ensuite.
+Statut : Phase 0/1 de la roadmap (spec §12) implémentée et testée —
+schéma, DSL, stockage Iceberg, index et exécution mono-partition
+fonctionnent bout en bout in-process (voir §5 plus bas et `examples/demo`).
+Il ne manque que les deux binaires réseau et la distribution
+multi-partitions (Phase 2).
 
 ## 1. Vue d'ensemble du workspace
 
@@ -99,25 +101,33 @@ l'ancienne génération.
 
 ## 5. Ce qui est fait vs. ce qui reste (Phase 0/1, spec §12)
 
-Fait (ce commit) :
-- Types de domaine et modèle de schéma (`graph-schema`).
-- Contrats (traits) de chaque sous-système : `IcebergReader`, `IndexBuilder`,
-  `Parser`/`Validator`, `Planner`/`LocalExecutor`/`DistributedExecutor`,
-  `Discovery`/`RebalancePlanner`.
-- Structures de données de l'index (CSR, B-Tree, génération, swap atomique
-  via `ArcSwap`).
-- Définitions gRPC (`graph.proto`) pour les deux services.
-- Squelette des deux binaires, wiring gRPC en place (`tonic`), routes
-  renvoyant `unimplemented` en attendant la Phase 1.
-- `cargo check --workspace` passe sans warning.
+Fait — le détail crate par crate est dans `IMPLEMENTATION.md` et l'état
+tâche par tâche dans `TASKS.md` (tout ce qui y est coché `✅`) :
+- Modèle de données, IDL et son parser, évolution de schéma
+  (`graph-schema`, S1-S7).
+- DSL complet (grammaire, parser, validateur statique) sur les deux
+  formes de requête prioritaires du spec §7.1 (`graph-dsl`, D1-D9).
+- Intégration Apache Iceberg réelle (`apache/iceberg-rust`), lecture
+  seule, catalogue mémoire + FileIO local pour le dev (`graph-storage`,
+  ST1-ST6).
+- Index CSR + B-Tree construits depuis Iceberg, `GenerationHandle` avec
+  swap atomique testé sous accès concurrent (`graph-index`, IX1-IX8).
+- Planificateur naïf + exécuteur local mono-partition, bout en bout sur
+  la requête k-hop exemple du spec (`graph-query`, Q1-Q4).
+- Un exécutable de démonstration (`examples/demo`) qui enchaîne tout ce
+  qui précède : ingère un petit graphe dans un warehouse Iceberg local,
+  construit l'index, puis exécute la requête k-hop exemple du spec §7.1
+  de bout en bout. Lancer avec `cargo run -p graph-engine-demo` depuis
+  `graph-engine/`.
 
-Reste à faire (Phase 0/1) :
-- Grammaire IDL concrète (`SchemaParser`) et grammaire DSL concrète
-  (`graph_dsl::Parser`) — actuellement des contrats sans implémentation.
-- Implémentation `IcebergReader` (crate Iceberg Rust à choisir/intégrer).
-- Logique de construction d'index (`IndexBuilder::build` — scan, filtrage
-  par partition, construction CSR/B-Tree).
-- Logique d'exécution (`LocalExecutor`, `DistributedExecutor`).
+Reste à faire (Phase 1/2) :
+- `bin/graph-partition-node` et `bin/graph-coordinator` : les deux
+  process réseau (gRPC via `graph-proto`) qui exposent ce qui précède —
+  jusqu'ici tout tourne in-process, sans réseau (voir tâches PN/CO,
+  `TASKS.md`).
+- Distribution multi-partitions (`graph-cluster`, `DistributedExecutor` —
+  Phase 2).
+- Câblage observabilité réel (`graph-observability`).
 - Le seul TBD encore ouvert côté spec (§13) : processus de migration de
   schéma incompatible — sans impact sur cette architecture, à traiter au
   moment venu.
