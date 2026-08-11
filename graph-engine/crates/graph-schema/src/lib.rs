@@ -7,6 +7,9 @@
 //! depends on nothing else in this workspace.
 
 mod grammar;
+mod parser;
+
+pub use parser::PestSchemaParser;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -111,8 +114,8 @@ pub enum SchemaError {
     TypeMismatch { property: String },
 }
 
-/// Parses the declarative IDL (§3.4) into a [`Schema`]. Concrete grammar and
-/// implementation are Phase 0 work (§12) — not yet finalized in the spec.
+/// Parses the declarative IDL (§3.4) into a [`Schema`]. See
+/// [`PestSchemaParser`] for the concrete `pest`-backed implementation.
 pub trait SchemaParser {
     fn parse(&self, idl_source: &str) -> Result<Schema, SchemaError>;
 }
