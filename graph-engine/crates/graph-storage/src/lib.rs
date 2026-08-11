@@ -6,9 +6,18 @@
 //! above this layer (graph-index) treats storage as an immutable, pinned
 //! view (§4.2).
 
+mod iceberg_reader;
+mod property_value;
+
+pub use iceberg_reader::{edge_table_name, node_table_name, IcebergCatalogReader};
+
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 use graph_schema::{EdgeId, EdgeType, Label, NodeId, Schema};
 use std::collections::BTreeMap;
+
+pub type NodeRowStream = BoxStream<'static, Result<NodeRow, StorageError>>;
+pub type EdgeRowStream = BoxStream<'static, Result<EdgeRow, StorageError>>;
 
 /// Opaque handle to a single Iceberg snapshot, pinned once per index rebuild
 /// cycle (§4.2) so every table read during that cycle sees the same
@@ -56,9 +65,16 @@ pub enum StorageError {
     Backend(String),
 }
 
-/// Read-only Iceberg access, one implementation per object store backend
-/// (S3, GCS, ...). Table layout: one table per node label / edge type
-/// (§4.1) — table names are derived from the schema, not passed by callers.
+/// Read-only Iceberg access, one implementation per catalog (see
+/// [`IcebergCatalogReader`]). Table layout: one table per node label /
+/// edge type (§4.1) — table names are derived from the schema via
+/// [`node_table_name`]/[`edge_table_name`], not passed by callers.
+///
+/// `scan_nodes`/`scan_edges` are `async fn`s that *return* a stream,
+/// rather than plain sync iterators: resolving the table (a catalog call)
+/// is itself I/O, and the object-store reads driving the returned stream
+/// are inherently async — there's no synchronous way to drive either
+/// without blocking a runtime thread.
 #[async_trait]
 pub trait IcebergReader: Send + Sync {
     /// Resolves the latest committed snapshot for a table at call time.
@@ -71,18 +87,18 @@ pub trait IcebergReader: Send + Sync {
     /// given label. Callers (graph-index) further filter by partition
     /// ownership (§6.2) after scanning — physical Iceberg partition
     /// alignment with cluster partitioning is still `TBD` (spec §4.1).
-    fn scan_nodes(
+    async fn scan_nodes(
         &self,
         schema: &Schema,
         label: &Label,
         snapshot: SnapshotId,
-    ) -> Result<Box<dyn Iterator<Item = Result<NodeRow, StorageError>> + Send>, StorageError>;
+    ) -> Result<NodeRowStream, StorageError>;
 
     /// Streams every row of an edge table as of `snapshot`.
-    fn scan_edges(
+    async fn scan_edges(
         &self,
         schema: &Schema,
         edge_type: &EdgeType,
         snapshot: SnapshotId,
-    ) -> Result<Box<dyn Iterator<Item = Result<EdgeRow, StorageError>> + Send>, StorageError>;
+    ) -> Result<EdgeRowStream, StorageError>;
 }

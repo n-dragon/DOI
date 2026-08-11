@@ -7,3 +7,11 @@ edition.workspace = true
 graph-schema.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
+futures.workspace = true
+iceberg = "0.10.1"
+arrow-array = "58"
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = "3"
+parquet = "58"
