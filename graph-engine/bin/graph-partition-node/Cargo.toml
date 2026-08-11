@@ -1,0 +1,19 @@
+[package]
+name = "graph-partition-node"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+graph-schema.workspace = true
+graph-storage.workspace = true
+graph-index.workspace = true
+graph-dsl.workspace = true
+graph-query.workspace = true
+graph-proto.workspace = true
+graph-observability.workspace = true
+tokio = { workspace = true }
+tonic = { workspace = true }
+async-trait.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+iceberg = "0.10.1"

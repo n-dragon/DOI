@@ -11,3 +11,9 @@ nbactions.xml
 *.log
 *.log.lck
 jks/
+
+# graph-engine/bin holds real source (the network binaries), unlike the
+# legacy Java project's bin/ (compiled classes) the blanket rule above
+# targets.
+!graph-engine/bin/
+!graph-engine/bin/**

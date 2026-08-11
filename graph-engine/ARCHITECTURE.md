@@ -6,11 +6,13 @@ requête de bout en bout. Toute décision citée ici (`§X.Y`) renvoie à la
 spec — ce document ne re-justifie pas les choix, il les fait correspondre
 à des unités de code.
 
-Statut : Phase 0/1 de la roadmap (spec §12) implémentée et testée —
-schéma, DSL, stockage Iceberg, index et exécution mono-partition
-fonctionnent bout en bout in-process (voir §5 plus bas et `examples/demo`).
-Il ne manque que les deux binaires réseau et la distribution
-multi-partitions (Phase 2).
+Statut : Phase 1 de la roadmap (spec §12) implémentée et testée de bout
+en bout — schéma, DSL, stockage Iceberg, index, exécution mono-partition,
+et les deux binaires réseau (`graph-coordinator`/`graph-partition-node`)
+communiquant en vrai gRPC (voir §5 plus bas). Reste : distribution
+multi-partitions et un catalogue Iceberg persistant pour un déploiement
+multi-process réel (Phase 2 — voir la limite connue documentée dans
+`IMPLEMENTATION.md`, section `bin/graph-partition-node`).
 
 ## 1. Vue d'ensemble du workspace
 
@@ -115,18 +117,29 @@ tâche par tâche dans `TASKS.md` (tout ce qui y est coché `✅`) :
 - Planificateur naïf + exécuteur local mono-partition, bout en bout sur
   la requête k-hop exemple du spec (`graph-query`, Q1-Q4).
 - Un exécutable de démonstration (`examples/demo`) qui enchaîne tout ce
-  qui précède : ingère un petit graphe dans un warehouse Iceberg local,
-  construit l'index, puis exécute la requête k-hop exemple du spec §7.1
-  de bout en bout. Lancer avec `cargo run -p graph-engine-demo` depuis
-  `graph-engine/`.
+  qui précède in-process : ingère un petit graphe dans un warehouse
+  Iceberg local, construit l'index, puis exécute la requête k-hop exemple
+  du spec §7.1 de bout en bout. Lancer avec `cargo run -p
+  graph-engine-demo` depuis `graph-engine/`.
+- `bin/graph-partition-node` et `bin/graph-coordinator` (PN1-PN5,
+  CO1-CO4) : les deux process réseau qui exposent ce qui précède via
+  `graph-proto`, communiquant en vrai gRPC sur de vrais sockets TCP —
+  vérifié par un test d'intégration qui lance les deux et exécute la
+  requête k-hop de bout en bout à travers eux (jalon MVP mono-partition,
+  spec §12 Phase 1).
 
-Reste à faire (Phase 1/2) :
-- `bin/graph-partition-node` et `bin/graph-coordinator` : les deux
-  process réseau (gRPC via `graph-proto`) qui exposent ce qui précède —
-  jusqu'ici tout tourne in-process, sans réseau (voir tâches PN/CO,
-  `TASKS.md`).
-- Distribution multi-partitions (`graph-cluster`, `DistributedExecutor` —
-  Phase 2).
+⚠️ **Limite connue avant tout déploiement multi-process réel** : le
+catalogue Iceberg dev (`MemoryCatalog`, décision ST1) a un registre de
+tables en mémoire, propre à chaque processus — un `graph-partition-node`
+lancé séparément d'un job d'ingestion ne verra pas ses tables, même si
+les fichiers Parquet existent sur disque (vérifié empiriquement). Un
+déploiement réel (VM, cluster) demande de basculer vers un catalogue
+persistant (candidat déjà identifié en ST1 : `iceberg-catalog-sql` +
+SQLite, ou un catalogue REST) — détaillé dans `IMPLEMENTATION.md`.
+
+Reste à faire (Phase 2) :
+- Distribution multi-partitions (`graph-cluster`, `DistributedExecutor`,
+  `CO5`).
 - Câblage observabilité réel (`graph-observability`).
 - Le seul TBD encore ouvert côté spec (§13) : processus de migration de
   schéma incompatible — sans impact sur cette architecture, à traiter au

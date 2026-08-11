@@ -222,11 +222,18 @@ partition (`PartitionService`).
 
 **Fait.** Le `.proto` complet et le build compile (nécessite `protoc`
 installé — dépendance externe documentée, pas un problème de conception).
+Étendu une fois `graph-query`'s `PlanStep` stabilisé (Q1-Q4) pour porter
+ce qu'il transporte réellement : `ExpandHopRequest` a gagné
+`from_alias`/`to_alias`/`to_label`, `hop_min`/`hop_max` et une liste de
+`PropertyFilter` (absents du contrat d'origine, écrit avant que
+`PlanStep::ExpandHop` existe) ; `ResolveStartRequest` a gagné `alias` ;
+`PartitionService` a gagné `GetIndexStatus` ; `IndexStatusResponse` a
+changé son `pinned_snapshot_id` (scalaire) en `pinned_snapshot_by_table`
+(map), `GenerationMeta` épinglant un snapshot par table.
 
-**Reste à faire.** Ajuster les messages une fois la grammaire DSL et les
-types de `PlanStep`/`Frontier` stabilisés (le `Value` `oneof` actuel
-couvre les types scalaires de base, `List`/`Vector` du schéma §3.2 n'y
-sont pas encore représentés).
+**Reste à faire.** `List`/`Vector` du schéma §3.2 ne sont pas
+représentables dans le `Value` `oneof` actuel — pas encore nécessaire
+tant que le DSL ne les utilise pas dans une clause `WHERE`.
 
 ---
 
@@ -290,45 +297,73 @@ binaires.
 
 ---
 
-## bin/graph-coordinator
+## bin/graph-coordinator — ✅ terminé (Phase 1, mode mono-partition)
 
 **Rôle.** Process réseau implémentant `GraphService` — le rôle
 coordinateur (§6.1), déployé en `Deployment` Kubernetes (§10).
 
-**Dépend de** : `graph-dsl`, `graph-query`, `graph-proto`, `graph-cluster`,
-`graph-observability`.
+**Dépend de** : `graph-dsl`, `graph-index`, `graph-query`, `graph-proto`,
+`graph-observability`. (`graph-cluster` seulement à partir de CO5,
+Phase 2 — mono-partition v1 n'a rien à découvrir.)
 
-**Fait.** Le serveur gRPC démarre, expose `HealthCheck` fonctionnel ; les
-trois autres routes renvoient `unimplemented` en attendant leurs
-dépendances.
+**Ce qu'elle expose.** Un `[lib]` en plus du binaire (`config`,
+`remote_executor`, `service`) — nécessaire pour que le test d'intégration
+CO4 puisse instancier un vrai `GraphServiceImpl` sans dupliquer le code.
 
-**Reste à faire.** Construire et injecter dans `GraphServiceImpl` des
-implémentations concrètes de `graph_dsl::Parser`/`Validator`,
-`graph_query::Planner`/`DistributedExecutor`, `graph_cluster::Discovery` —
-puis implémenter `execute_query` (parse → valide → plan → exécute →
-streame), `get_schema` et `get_index_status`.
+**Fait (CO1-CO4).** `GraphServiceImpl` complet : `get_schema`,
+`execute_query` (parse → valide → plan → `remote_executor::execute`,
+qui traduit chaque `PlanStep` en appel gRPC réel contre le nœud de
+partition configuré → projette `RETURN` → streame), `get_index_status`
+(relaie celui du nœud de partition), `health_check`. Config via
+variables d'environnement (`GRAPH_SCHEMA_PATH`,
+`GRAPH_PARTITION_NODE_ADDR`, `GRAPH_COORDINATOR_LISTEN_ADDR`).
+
+**Reste à faire (Phase 2).** `DistributedExecutor`/CO5 : remplacer
+l'appel direct à un seul nœud de partition par un vrai scatter-gather via
+`graph_cluster::Discovery` une fois plus d'une partition existe.
 
 ---
 
-## bin/graph-partition-node
+## bin/graph-partition-node — ✅ terminé (Phase 1)
 
 **Rôle.** Process réseau implémentant `PartitionService` — le rôle nœud de
 partition (§6.1), déployé en `StatefulSet` Kubernetes (§10). Héberge une
 réplique d'une partition et fait tourner le cycle de rebuild périodique.
 
-**Dépend de** : `graph-storage`, `graph-index`, `graph-query`,
-`graph-proto`, `graph-observability`.
+**Dépend de** : `graph-storage`, `graph-index`, `graph-dsl` (pour les
+types du plan), `graph-query`, `graph-proto`, `graph-observability`.
 
-**Fait.** Le serveur gRPC démarre, expose `HealthCheck` fonctionnel, le
-squelette de la boucle de rebuild périodique (`rebuild::periodic_rebuild_loop`)
-tourne en tâche de fond dès le démarrage.
+**Ce qu'elle expose.** Un `[lib]` en plus du binaire (`config`,
+`rebuild`, `service`), pour la même raison que `graph-coordinator`.
 
-**Reste à faire.** `rebuild::bootstrap` (construire un `IcebergReader` et
-un `IndexBuilder` concrets, faire le premier build synchrone avant de
-servir), le corps réel de `periodic_rebuild_loop` (appeler
-`IndexBuilder::build` puis `GenerationHandle::swap`), et
-`PartitionServiceImpl::resolve_start`/`expand_hop` (délégation à
-`graph_query::LocalExecutor`).
+**Fait (PN1-PN5).** `rebuild::bootstrap` (premier build synchrone) et
+`rebuild::periodic_rebuild_loop` (rebuild périodique, `swap` atomique en
+cas de succès, ancienne génération conservée et erreur logguée sinon) ;
+`PartitionServiceImpl` complet : `resolve_start`/`expand_hop` (délégation
+à `graph_query::SimpleLocalExecutor`, traduction wire ↔ types du plan),
+`get_index_status`, `health_check`. Config via variables d'environnement
+(`GRAPH_SCHEMA_PATH`, `GRAPH_WAREHOUSE_PATH`, `GRAPH_NAMESPACE`,
+`GRAPH_PARTITION_ID`, `GRAPH_N_PARTITIONS`, `GRAPH_REBUILD_INTERVAL_SECS`,
+`GRAPH_PARTITION_LISTEN_ADDR`).
+
+**Test d'intégration (CO4, côté `graph-coordinator`).** Lance un vrai
+`PartitionServiceImpl` et un vrai `GraphServiceImpl`, tous deux servant
+sur de vrais sockets TCP loopback, connectés par de vrais clients gRPC
+générés — exécute la requête k-hop exemple du spec §7.1 de bout en bout.
+**C'est le jalon MVP mono-partition (spec §12 Phase 1).**
+
+**⚠️ Limite connue avant tout déploiement multi-process réel.** Le
+catalogue dev (`MemoryCatalog`, décision ST1) a un registre de tables **en
+mémoire, par processus** : deux processus séparés pointant vers le même
+répertoire `FileIO` ne voient pas les mêmes tables (vérifié
+empiriquement — `NamespaceNotFound` malgré des fichiers Parquet présents
+sur disque). Ingestion et `graph-partition-node` doivent donc tourner
+dans le même process pour l'instant (voir `examples/demo`, ou CO4/ce
+test). Basculer vers un catalogue persistant (candidat déjà identifié en
+ST1 : `iceberg-catalog-sql` + SQLite pour rester "zéro infra" en dev, ou
+un catalogue REST) est un prérequis pour tout déploiement où
+`graph-partition-node` tourne en process séparé de l'ingestion —
+typiquement, tout déploiement sur une VM ou en cluster.
 
 ---
 

@@ -140,34 +140,61 @@ tâche n'est "faite" que si elle compile et que son test passe.
   le test, vérifie les `Binding` obtenus. *(dépend de Q2, Q3)* — vérifie à
   la fois la borne du hop range et le filtre `WHERE birth_year > 1990`.
 
-### bin/graph-partition-node
+### bin/graph-partition-node — ✅ terminé (Phase 1)
 
-- **PN1** — Implémenter `rebuild::bootstrap` : construit `IcebergReader` +
+- ✅ **PN1** — Implémenter `rebuild::bootstrap` : construit `IcebergReader` +
   `IndexBuilder` concrets, premier build synchrone. *(dépend de ST1, IX1)*
-- **PN2** — Implémenter le corps de `periodic_rebuild_loop` (appelle
+- ✅ **PN2** — Implémenter le corps de `periodic_rebuild_loop` (appelle
   `IndexBuilder::build`, puis `GenerationHandle::swap` si succès, logge et
   garde l'ancienne génération si échec). *(dépend de PN1)*
-- **PN3** — Implémenter `PartitionServiceImpl::resolve_start` (délègue à
+- ✅ **PN3** — Implémenter `PartitionServiceImpl::resolve_start` (délègue à
   `LocalExecutor::resolve_start`). *(dépend de Q2)*
-- **PN4** — Implémenter `PartitionServiceImpl::expand_hop` (délègue à
+- ✅ **PN4** — Implémenter `PartitionServiceImpl::expand_hop` (délègue à
   `LocalExecutor::expand_hop`). *(dépend de Q3)*
-- **PN5** — Config du binaire : lecture de `n_partitions`/`partition_id`/
-  intervalle de rebuild depuis l'environnement.
+- ✅ **PN5** — Config du binaire : lecture de `n_partitions`/`partition_id`/
+  intervalle de rebuild depuis l'environnement. *(`n_partitions`
+  informationnel seulement en Phase 1, non encore utilisé pour filtrer —
+  IX3 est un no-op tant que le partitionnement Phase 2 n'existe pas)*
 
-### bin/graph-coordinator (mode mono-partition)
+  ⚠️ **Limite connue, à lever avant tout déploiement multi-process réel** :
+  le catalogue dev choisi en ST1 (`MemoryCatalog`) a un registre de tables
+  **en mémoire, par processus**. Deux processus séparés pointant vers le
+  même répertoire `FileIO` ne voient PAS les mêmes tables : les fichiers
+  Parquet/metadata.json existent bien sur disque, mais un nouveau
+  processus démarre avec un catalogue vide et ne les retrouve pas
+  (`NamespaceNotFound`, vérifié empiriquement). Ingestion (par un job
+  externe) et `graph-partition-node` doivent donc tourner dans le même
+  process pour l'instant. Pour un vrai déploiement (VM, k8s), il faut
+  basculer vers un catalogue persistant (candidat déjà identifié en
+  ST1 : `iceberg-catalog-sql` + SQLite, ou un catalogue REST) — c'est la
+  suite logique avant toute tentative de déploiement multi-process.
 
-- **CO1** — Implémenter `GraphServiceImpl::get_schema` (retourne le
+### bin/graph-coordinator (mode mono-partition) — ✅ terminé (Phase 1)
+
+- ✅ **CO1** — Implémenter `GraphServiceImpl::get_schema` (retourne le
   `Schema` actif). *(dépend de S2)*
-- **CO2** — Implémenter `GraphServiceImpl::execute_query` en mode
+- ✅ **CO2** — Implémenter `GraphServiceImpl::execute_query` en mode
   mono-partition : parse (D-crate) → valide (D7-D9) → plan (Q1) → exécute
   en appelant directement le `graph-partition-node` local (pas de
   scatter-gather multi-partitions à ce stade) → streame les résultats
-  projetés. *(dépend de D9, Q4, PN3, PN4)*
-- **CO3** — Implémenter `GraphServiceImpl::get_index_status` (relaie le
-  `GenerationMeta` du nœud de partition). *(dépend de PN1)*
-- **CO4** — Test d'intégration MVP : lancer `graph-partition-node` +
+  projetés. *(dépend de D9, Q4, PN3, PN4)* — via `remote_executor`, qui
+  traduit chaque `PlanStep` en appel gRPC réel (`ResolveStart`/
+  `ExpandHop`) contre `graph-proto`, étendu pour transporter ce qu'un
+  `PlanStep::ExpandHop` porte réellement (hop range, filtres `WHERE`,
+  alias) — le contrat proto d'origine, écrit avant Q1-Q4, ne le
+  permettait pas.
+- ✅ **CO3** — Implémenter `GraphServiceImpl::get_index_status` (relaie le
+  `GenerationMeta` du nœud de partition). *(dépend de PN1)* — nécessite
+  d'ajouter `GetIndexStatus` à `PartitionService` (absent du proto
+  d'origine) et de changer `IndexStatusResponse.pinned_snapshot_id`
+  (scalaire) en `pinned_snapshot_by_table` (map) puisque `GenerationMeta`
+  épingle un snapshot par table, pas un seul pour toute la génération.
+- ✅ **CO4** — Test d'intégration MVP : lancer `graph-partition-node` +
   `graph-coordinator` en mono-partition, exécuter une requête k-hop de
-  bout en bout via le client gRPC généré. *(dépend de CO2)*
+  bout en bout via le client gRPC généré. *(dépend de CO2)* — les deux
+  services tournent réellement (vrais serveurs tonic sur TCP loopback,
+  pas des appels de trait in-process), connectés par de vrais clients
+  gRPC générés. **C'est le jalon Phase 1 : MVP mono-partition complet.**
 
 > **Jalon** : CO4 qui passe = MVP mono-partition complet (spec §12 Phase
 > 1) — modèle de données et DSL validés de bout en bout avant d'attaquer

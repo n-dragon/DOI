@@ -1154,6 +1154,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "graph-coordinator"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "async-trait",
+ "futures",
+ "graph-dsl",
+ "graph-index",
+ "graph-observability",
+ "graph-partition-node",
+ "graph-proto",
+ "graph-query",
+ "graph-schema",
+ "graph-storage",
+ "iceberg",
+ "parquet",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tonic",
+]
+
+[[package]]
 name = "graph-dsl"
 version = "0.1.0"
 dependencies = [
@@ -1198,6 +1221,25 @@ name = "graph-observability"
 version = "0.1.0"
 dependencies = [
  "tracing",
+]
+
+[[package]]
+name = "graph-partition-node"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "graph-dsl",
+ "graph-index",
+ "graph-observability",
+ "graph-proto",
+ "graph-query",
+ "graph-schema",
+ "graph-storage",
+ "iceberg",
+ "thiserror 1.0.69",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]
