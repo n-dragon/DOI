@@ -8,6 +8,10 @@
 //! query references it anymore. There is no in-place mutation: a rebuild
 //! always produces a brand new generation.
 
+mod builder;
+
+pub use builder::IcebergIndexBuilder;
+
 use arc_swap::ArcSwap;
 use graph_schema::{EdgeId, EdgeType, Label, NodeId};
 use graph_storage::SnapshotId;
@@ -120,9 +124,27 @@ impl PropertyIndex {
             .unwrap_or(&[])
     }
 
-    // Range lookups (`WHERE friend.birth_year > 1990`, spec §7.1 example)
-    // iterate a `BTreeMap` range — signature intentionally deferred to
-    // Phase 0 implementation once the DSL's comparison operators are fixed.
+    /// Range lookup (`WHERE friend.birth_year > 1990`, spec §7.1 example),
+    /// via a plain [`std::ops::Bound`] pair rather than `graph_dsl`'s
+    /// `ComparisonOp` directly — this crate doesn't depend on `graph-dsl`
+    /// (see the workspace dependency graph in `TASKS.md`), so translating
+    /// an operator into bounds is `graph-query`'s job, which depends on
+    /// both.
+    pub fn lookup_range(
+        &self,
+        label_or_type: &str,
+        property: &str,
+        bounds: (std::ops::Bound<PropertyKey>, std::ops::Bound<PropertyKey>),
+    ) -> Vec<NodeId> {
+        self.by_key
+            .get(&(label_or_type.to_string(), property.to_string()))
+            .map(|tree| {
+                tree.range(bounds)
+                    .flat_map(|(_, ids)| ids.iter().copied())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// Metadata surfaced verbatim by the `GetIndexStatus` RPC (§8.2).

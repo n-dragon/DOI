@@ -87,27 +87,31 @@ tâche n'est "faite" que si elle compile et que son test passe.
 
 ## Phase 1 — MVP mono-partition
 
-### graph-index
+### graph-index — ✅ terminé (Phase 1)
 
-- **IX1** — Implémenter la construction du tableau CSR sortant (tri des
+- ✅ **IX1** — Implémenter la construction du tableau CSR sortant (tri des
   arêtes par `src_node_id`, calcul des offsets) dans `IndexBuilder::build`.
-  *(dépend de ST4, ST5)*
-- **IX2** — Implémenter la construction du tableau CSR entrant (même
+  *(dépend de ST4, ST5)* — `IcebergIndexBuilder`.
+- ✅ **IX2** — Implémenter la construction du tableau CSR entrant (même
   logique, trié par `dst_node_id`). *(dépend de IX1)*
-- **IX3** — Détection de référence distante (`RemoteRef`) : un voisin dont
+- ✅ **IX3** — Détection de référence distante (`RemoteRef`) : un voisin dont
   le `node_id` hache vers une autre partition. *(dépend de IX2 ; nécessite
   `PartitionHasher`, cf. CL1 — no-op en Phase 1 mono-partition où tout est
-  local)*
-- **IX4** — Implémenter la construction de `PropertyIndex` (une seule
+  local)* — `dst_remote` toujours `None`, testé explicitement.
+- ✅ **IX4** — Implémenter la construction de `PropertyIndex` (une seule
   propriété indexée pour commencer) à partir des lignes scannées.
-  *(dépend de ST4)*
-- **IX5** — Ajouter le lookup par plage (`range`) sur `PropertyIndex`, en
-  plus de `lookup_eq` déjà présent. *(dépend de IX4)*
-- **IX6** — Tests `TopologicalIndex` : voisins sortants/entrants corrects
+  *(dépend de ST4)* — toutes les propriétés `@indexed` du schéma, pas
+  qu'une seule.
+- ✅ **IX5** — Ajouter le lookup par plage (`range`) sur `PropertyIndex`, en
+  plus de `lookup_eq` déjà présent. *(dépend de IX4)* — via
+  `std::ops::Bound<PropertyKey>` (pas `graph_dsl::ComparisonOp` :
+  `graph-index` ne dépend pas de `graph-dsl`, cf. graphe de dépendances
+  en bas de ce fichier).
+- ✅ **IX6** — Tests `TopologicalIndex` : voisins sortants/entrants corrects
   sur un petit graphe synthétique (5-10 nœuds). *(dépend de IX2)*
-- **IX7** — Tests `PropertyIndex` : égalité et plage retournent les bons
+- ✅ **IX7** — Tests `PropertyIndex` : égalité et plage retournent les bons
   `NodeId`. *(dépend de IX5)*
-- **IX8** — Test `GenerationHandle` : une requête qui a acquis une
+- ✅ **IX8** — Test `GenerationHandle` : une requête qui a acquis une
   génération continue de la voir après un `swap()` concurrent (pas
   d'incohérence, pas de panic). *(dépend de IX1..IX5)*
 

@@ -1169,9 +1169,11 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "async-trait",
+ "futures",
  "graph-schema",
  "graph-storage",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
 ]
 
