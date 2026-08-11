@@ -28,6 +28,10 @@ service GraphService {
 service PartitionService {
   rpc ResolveStart(ResolveStartRequest) returns (stream Binding);
   rpc ExpandHop(ExpandHopRequest) returns (stream Binding);
+  // Reuses GraphService's message types — the coordinator's own
+  // GetIndexStatus (CO3) just relays this partition's GenerationMeta
+  // verbatim, mono-partition v1 having exactly one to relay.
+  rpc GetIndexStatus(GetIndexStatusRequest) returns (IndexStatusResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
@@ -60,7 +64,10 @@ message SchemaResponse {
 message GetIndexStatusRequest {}
 
 message IndexStatusResponse {
-  int64 pinned_snapshot_id = 1;
+  // One pinned snapshot per Iceberg table (§4.2), keyed by table name -
+  // a single scalar can't represent this: a rebuild pins a snapshot per
+  // table it scans, not one for the whole generation.
+  map<string, int64> pinned_snapshot_by_table = 1;
   int64 last_rebuilt_unix_ms = 2;
   uint64 node_count = 3;
   uint64 edge_count = 4;
@@ -78,15 +85,45 @@ message HealthCheckResponse {
 }
 
 message ResolveStartRequest {
-  string label_or_type = 1;
-  string property = 2;
-  Value key = 3;
+  // Alias to bind each resolved node under, e.g. "p" in
+  // `MATCH (p:Person {name: "Alice"})` — carried explicitly since the
+  // response only contains `Binding`s, not the request that produced
+  // them.
+  string alias = 1;
+  string label_or_type = 2;
+  string property = 3;
+  Value key = 4;
 }
 
 message ExpandHopRequest {
   repeated Binding frontier = 1;
-  string edge_type = 2;
-  bool incoming = 3;
+  string from_alias = 2;
+  string to_alias = 3;
+  // Empty = the pattern left the destination node unlabeled, in which
+  // case `filters` is necessarily empty too — see
+  // `graph_query::PlanStep::ExpandHop`'s doc comment for why.
+  string to_label = 4;
+  // Empty = untyped edge (`-->`, no `[:TYPE]`).
+  string edge_type = 5;
+  bool incoming = 6;
+  uint32 hop_min = 7;
+  uint32 hop_max = 8;
+  repeated PropertyFilter filters = 9;
+}
+
+message PropertyFilter {
+  string property = 1;
+  ComparisonOp op = 2;
+  Value value = 3;
+}
+
+enum ComparisonOp {
+  EQ = 0;
+  NE = 1;
+  LT = 2;
+  LTE = 3;
+  GT = 4;
+  GTE = 5;
 }
 
 message Binding {
