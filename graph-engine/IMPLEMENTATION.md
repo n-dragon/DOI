@@ -25,16 +25,15 @@ le workspace.
 **Dépend de** : rien. **Dépendent d'elle** : toutes les autres crates.
 
 **Fait.** Tous les types de domaine, `Schema::node_def`/`edge_def`,
-`SchemaError`.
+`SchemaError` ; grammaire `pest` de l'IDL et `PestSchemaParser` (S1-S4,
+avec tests sur l'exemple §3.4 et les cas d'erreur — label/type dupliqué,
+endpoint d'arête inconnu, propriété sans type) ; `SpecSchemaEvolution`
+(S5-S7, les deux règles §3.5 : compatible = propriété optionnelle
+ajoutée ou nouveau label/type d'arête ; incompatible = propriété
+supprimée ou retypée — un renommage n'étant pas distingué d'un
+remove+add faute de marqueur dédié dans l'IDL).
 
 **Reste à faire (Phase 0).**
-- Grammaire concrète de l'IDL et son parser (le spec §3.4 donne un exemple
-  illustratif proche Protobuf/Avro, la grammaire formelle n'est pas
-  figée) — candidat : `pest` (grammaire déclarative en `.pest`, lisible)
-  ou un parser combinator (`chumsky`/`nom`) si on veut de meilleurs
-  messages d'erreur.
-- Logique de `SchemaEvolution::diff` (comparer deux `Schema`, détecter
-  suppression/renommage/changement de type de propriété).
 - Génération du schéma des tables Iceberg à partir d'un `Schema` (utilisée
   par le pipeline d'ingestion externe, hors binaire du moteur — mais le
   mapping doit être défini ici pour rester la source de vérité, §3.4).

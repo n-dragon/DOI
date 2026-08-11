@@ -13,23 +13,24 @@ tâche n'est "faite" que si elle compile et que son test passe.
 
 ## Phase 0 — Fondations
 
-### graph-schema
+### graph-schema — ✅ terminé (Phase 0)
 
-- **S1** — Écrire la grammaire `pest` de l'IDL (syntaxe `schema`, `node`,
+- ✅ **S1** — Écrire la grammaire `pest` de l'IDL (syntaxe `schema`, `node`,
   `edge`, types scalaires §3.2) dans un fichier `.pest`.
-- **S2** — Implémenter `SchemaParser::parse` : IDL → `Schema` en utilisant
-  S1. *(dépend de S1)*
-- **S3** — Tests : parser un schéma valide multi-nœuds/arêtes (l'exemple
+- ✅ **S2** — Implémenter `SchemaParser::parse` : IDL → `Schema` en utilisant
+  S1. *(dépend de S1)* — `PestSchemaParser`.
+- ✅ **S3** — Tests : parser un schéma valide multi-nœuds/arêtes (l'exemple
   §3.4) et vérifier le `Schema` produit. *(dépend de S2)*
-- **S4** — Tests : cas d'erreur (label dupliqué, type de relation avec
+- ✅ **S4** — Tests : cas d'erreur (label dupliqué, type de relation avec
   label source/cible inconnu, propriété sans type) → `SchemaError::Parse`.
   *(dépend de S2)*
-- **S5** — Implémenter `SchemaEvolution::diff` : cas compatible (ajout de
+- ✅ **S5** — Implémenter `SchemaEvolution::diff` : cas compatible (ajout de
   propriété optionnelle, ajout de label/type de relation).
-- **S6** — Implémenter `SchemaEvolution::diff` : cas incompatible
-  (suppression de propriété, renommage, changement de type).
-  *(dépend de S5)*
-- **S7** — Tests `SchemaEvolution::diff` pour chaque cas de S5/S6.
+- ✅ **S6** — Implémenter `SchemaEvolution::diff` : cas incompatible
+  (suppression de propriété, changement de type). *(dépend de S5 ; le
+  renommage n'est pas distingué d'un remove+add, l'IDL n'a pas de
+  marqueur de renommage — voir `evolution.rs`)*
+- ✅ **S7** — Tests `SchemaEvolution::diff` pour chaque cas de S5/S6.
   *(dépend de S6)*
 
 ### graph-dsl

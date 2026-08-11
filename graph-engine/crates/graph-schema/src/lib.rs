@@ -6,9 +6,11 @@
 //! typed client bindings (§3.4) — every other crate depends on it, it
 //! depends on nothing else in this workspace.
 
+mod evolution;
 mod grammar;
 mod parser;
 
+pub use evolution::SpecSchemaEvolution;
 pub use parser::PestSchemaParser;
 
 use serde::{Deserialize, Serialize};
@@ -123,7 +125,8 @@ pub trait SchemaParser {
 /// Classifies a schema change as compatible (applied without a blocking
 /// migration, mirroring Iceberg's native column-add evolution) or
 /// incompatible (property removed/renamed/retyped — requires the explicit
-/// migration process left as `TBD` in spec §3.5/§13).
+/// migration process left as `TBD` in spec §3.5/§13). See
+/// [`SpecSchemaEvolution`] for the concrete implementation.
 pub trait SchemaEvolution {
     fn diff(&self, from: &Schema, to: &Schema) -> EvolutionKind;
 }
