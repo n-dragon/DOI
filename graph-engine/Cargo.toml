@@ -9,8 +9,9 @@ members = [
     "crates/graph-proto",
     "crates/graph-cluster",
     "crates/graph-observability",
-    "bin/graph-coordinator",
-    "bin/graph-partition-node",
+    # bin/graph-coordinator and bin/graph-partition-node are added back
+    # once tasks PN1 and CO1 (TASKS.md) scaffold them — until then listing
+    # them here breaks `cargo check` for the whole workspace.
 ]
 
 [workspace.package]
