@@ -188,17 +188,19 @@ transforme une `Query` validée en plan, puis l'exécute soit localement
 **Dépend de** : `graph-schema`, `graph-dsl`, `graph-index`. **Dépendent
 d'elle** : les deux binaires.
 
-**Fait.** Tous les types intermédiaires et contrats. Le découplage
-`LocalExecutor`/`DistributedExecutor` est déjà posé : `LocalExecutor` est
-tout ce dont a besoin le MVP mono-partition (§12, Phase 1) — pas besoin
-d'attendre `graph-cluster` ni le réseau pour valider le modèle de données
-et le DSL de bout en bout.
+**Fait (Phase 1, Q1-Q4).** Tous les types intermédiaires et contrats. Le
+découplage `LocalExecutor`/`DistributedExecutor` est déjà posé :
+`LocalExecutor` est tout ce dont a besoin le MVP mono-partition (§12,
+Phase 1) — pas besoin d'attendre `graph-cluster` ni le réseau pour
+valider le modèle de données et le DSL de bout en bout. `NaivePlanner`
+(Q1) et `SimpleLocalExecutor` (Q2/Q3), testés bout en bout (Q4) sur la
+requête k-hop exemple du spec §7.1 (borne de hop range et filtre `WHERE`
+tous deux vérifiés). Portée v1 assumée : nœud de départ étiqueté avec un
+seul filtre d'égalité ; comparaisons d'alias (`colleague <> p`) non
+appliquées ; filtres `WHERE` évalués en fin d'`ExpandHop` plutôt que
+poussés hop par hop (l'optimisation que §7.3 laisse `TBD`).
 
 **Reste à faire.**
-- Phase 1 : `Planner::plan` (lowering naïf, sans optimisation — §7.3 note
-  déjà que l'ordre de filtres/choix d'index reste `TBD`) et
-  `LocalExecutor` (implémente réellement les deux variantes de
-  `PlanStep`).
 - Phase 2 : `DistributedExecutor` — utilise `graph-cluster::PartitionMap`
   pour router chaque étape vers les bonnes répliques via `graph-proto`.
 

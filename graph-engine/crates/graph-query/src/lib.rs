@@ -11,6 +11,12 @@
 //!   touches, collect responses, re-dispatch for the next hop. No
 //!   peer-to-peer message passing (decision recorded in spec §7.4).
 
+mod local_executor;
+mod planner;
+
+pub use local_executor::SimpleLocalExecutor;
+pub use planner::NaivePlanner;
+
 use async_trait::async_trait;
 use graph_dsl::Query;
 use graph_index::{GenerationHandle, PartitionId, PropertyKey, RemoteRef};
@@ -38,21 +44,30 @@ pub enum PlanStep {
         property: String,
         key: PropertyKey,
     },
-    /// Expand one hop of the pattern via the topological index (§5.1),
-    /// pushing `WHERE` filters down onto the new binding as early as
-    /// possible to keep intermediate frontiers small.
+    /// Expand the pattern via the topological index (§5.1) from
+    /// `from_alias` to `to_alias`, `hops.min..=hops.max` hops deep
+    /// (§7.1's `*1..3` syntax — a plain `-->` lowers to `min: 1, max: 1`).
+    /// `filters` are the `WHERE` conditions that apply to `to_alias`;
+    /// `to_label` is `to_alias`'s declared label, needed to route a
+    /// filter to the right property index (§5.2). If the pattern left
+    /// `to_alias` unlabeled, `to_label` is `None` and the planner (Q1)
+    /// drops any filter that would have targeted it — there's no index
+    /// to route through without a label, and the validator (D7-D9)
+    /// doesn't currently reject that combination itself.
     ExpandHop {
         from_alias: String,
         to_alias: String,
+        to_label: Option<String>,
         edge_type: Option<String>,
         direction: graph_dsl::Direction,
+        hops: graph_dsl::HopRange,
         filters: Vec<graph_dsl::PropertyFilter>,
     },
 }
 
 /// Turns a validated [`Query`] into a [`QueryPlan`]. Concrete cost-based
 /// choices (which index to start from, filter ordering) are Phase 2+ work
-/// (§7.3) — v1 lowers steps in pattern order.
+/// (§7.3) — v1 lowers steps in pattern order. See [`NaivePlanner`].
 pub trait Planner {
     fn plan(&self, query: &Query) -> QueryPlan;
 }
@@ -83,7 +98,7 @@ pub enum ExecutionError {
 /// generation (`GenerationHandle::acquire`, spec §5.3). This is the whole
 /// execution engine for the single-node MVP (§12 Phase 1); in the
 /// distributed setup it's what a `graph-partition-node` runs per RPC from
-/// the coordinator.
+/// the coordinator. See [`SimpleLocalExecutor`].
 #[async_trait]
 pub trait LocalExecutor {
     async fn resolve_start(

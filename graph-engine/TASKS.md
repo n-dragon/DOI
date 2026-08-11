@@ -117,17 +117,28 @@ tâche n'est "faite" que si elle compile et que son test passe.
 
 ### graph-query (exécution locale)
 
-- **Q1** — Implémenter `Planner::plan` : lowering naïf d'un `Pattern` en
+### graph-query (exécution locale) — ✅ terminé (Phase 1)
+
+- ✅ **Q1** — Implémenter `Planner::plan` : lowering naïf d'un `Pattern` en
   séquence `ResolveStart` + `ExpandHop*` dans l'ordre du motif.
-  *(dépend de D5)*
-- **Q2** — Implémenter `LocalExecutor::resolve_start` (délègue à
-  `PropertyIndex::lookup_eq`/range). *(dépend de IX5, Q1)*
-- **Q3** — Implémenter `LocalExecutor::expand_hop` (délègue à
+  *(dépend de D5)* — `NaivePlanner`. Portée v1 : nœud de départ étiqueté
+  avec exactement un filtre d'égalité ; les comparaisons d'alias
+  (`colleague <> p`) sont abandonnées plutôt qu'appliquées (lacune
+  documentée, pas silencieuse).
+- ✅ **Q2** — Implémenter `LocalExecutor::resolve_start` (délègue à
+  `PropertyIndex::lookup_eq`/range). *(dépend de IX5, Q1)* —
+  `SimpleLocalExecutor`.
+- ✅ **Q3** — Implémenter `LocalExecutor::expand_hop` (délègue à
   `TopologicalIndex::out_neighbors`/`in_neighbors`, applique les filtres
-  `WHERE` au plus tôt). *(dépend de IX2, Q1)*
-- **Q4** — Test bout en bout local : plan + exécute la requête k-hop
+  `WHERE` au plus tôt). *(dépend de IX2, Q1)* — BFS `hops.min..=hops.max`
+  correct pour `*1..3` ; les filtres `WHERE` sont appliqués en une passe
+  finale sur `to_alias` via l'index de propriété plutôt que poussés à
+  chaque hop (optimisation explicitement `TBD` en §7.3 — la base
+  naïve-mais-correcte est ce que cette optimisation doit améliorer).
+- ✅ **Q4** — Test bout en bout local : plan + exécute la requête k-hop
   d'exemple (§7.1) contre une `IndexGeneration` construite en mémoire pour
-  le test, vérifie les `Binding` obtenus. *(dépend de Q2, Q3)*
+  le test, vérifie les `Binding` obtenus. *(dépend de Q2, Q3)* — vérifie à
+  la fois la borne du hop range et le filtre `WHERE birth_year > 1990`.
 
 ### bin/graph-partition-node
 

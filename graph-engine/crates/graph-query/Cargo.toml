@@ -9,3 +9,8 @@ graph-dsl.workspace = true
 graph-index.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+graph-storage.workspace = true
+futures.workspace = true
+tokio = { workspace = true }

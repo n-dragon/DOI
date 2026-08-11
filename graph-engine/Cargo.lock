@@ -1198,10 +1198,13 @@ name = "graph-query"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures",
  "graph-dsl",
  "graph-index",
  "graph-schema",
+ "graph-storage",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
