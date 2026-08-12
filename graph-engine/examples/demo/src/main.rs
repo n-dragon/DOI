@@ -120,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("3. Building the in-memory index from Iceberg (IX1/IX2/IX4)...");
     let reader = IcebergCatalogReader::new(catalog, namespace);
-    let builder = IcebergIndexBuilder::new(reader, schema.clone());
+    let builder = IcebergIndexBuilder::new(reader, schema.clone(), 1);
     let generation = builder
         .build(
             PartitionId(0),

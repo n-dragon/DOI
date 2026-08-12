@@ -1,19 +1,32 @@
 //! Builds one [`IndexGeneration`] from Iceberg via [`IcebergReader`]
-//! (tasks IX1, IX2, IX4). Phase 1 is mono-partition (spec §12): every
-//! node/edge the schema declares is local, so [`RemoteRef`] (task IX3) is
-//! never populated here — it only starts mattering once graph-cluster
-//! assigns partitions across multiple processes (Phase 2). An edge whose
-//! endpoint isn't present locally (e.g. a schema/data mismatch, since
-//! there's no other partition to have it in Phase 1) is simply dropped
-//! from that side's adjacency rather than fabricating a dangling
-//! reference.
+//! (tasks IX1, IX2, IX4). §4.1 leaves Iceberg's own partition spec `TBD`
+//! ("candidat : bucket par node_id... pour aligner les partitions de
+//! lecture avec le partitionnement du cluster"), unresolved as of this
+//! revision — so every replica still scans *every* row of every
+//! node/edge table (no partition pushdown at the storage layer yet) and
+//! filters down to the nodes it owns in memory, via
+//! `graph_schema::partitioning::partition_of` (task IX3, revised for
+//! Phase 2 — see below). Once that Iceberg partition-spec TBD is
+//! resolved, a physical filter could be pushed into `scan_nodes`/
+//! `scan_edges` instead of scanning-then-discarding; not done here so as
+//! not to couple this task to that separate, still-open TBD (spec §13
+//! only lists schema-migration as open, but §4.1's partition spec is a
+//! second one, both out of scope for this revision).
+//!
+//! *(task IX3, revised)* An edge's destination is [`RemoteRef`] whenever
+//! it hashes to a different partition than the one being built —
+//! Phase 1's "always `None`" placeholder is gone now that `n_partitions`
+//! can be greater than 1. An edge whose endpoint is missing from Iceberg
+//! entirely (a genuine schema/data mismatch, not just "owned by another
+//! partition") is still silently dropped from that side's adjacency,
+//! same as before.
 
 use crate::{
     AdjacencyEntry, GenerationMeta, IndexBuilder, IndexGeneration, LocalIdx, NodeRecord,
-    PartitionId, PropertyIndex, PropertyKey, RebuildError, TopologicalIndex,
+    PartitionId, PropertyIndex, PropertyKey, RebuildError, RemoteRef, TopologicalIndex,
 };
 use futures::StreamExt;
-use graph_schema::{EdgeType, Label, NodeId, Schema};
+use graph_schema::{partitioning::partition_of, EdgeType, Label, NodeId, Schema};
 use graph_storage::{
     edge_table_name, node_table_name, EdgeRow, IcebergReader, NodeRow, PropertyValue,
 };
@@ -25,11 +38,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct IcebergIndexBuilder<R> {
     reader: R,
     schema: Schema,
+    /// Fixed for the graph's lifetime (spec §6.2) — passed once at
+    /// construction rather than per `build()` call, since it can never
+    /// legitimately differ between two rebuild cycles of the same
+    /// process. `1` (the Phase 1 default at every existing call site)
+    /// makes every node hash to partition 0, i.e. "everything is local"
+    /// — identical behavior to Phase 1's mono-partition builder.
+    n_partitions: u32,
 }
 
 impl<R: IcebergReader> IcebergIndexBuilder<R> {
-    pub fn new(reader: R, schema: Schema) -> Self {
-        Self { reader, schema }
+    pub fn new(reader: R, schema: Schema, n_partitions: u32) -> Self {
+        Self {
+            reader,
+            schema,
+            n_partitions,
+        }
     }
 }
 
@@ -71,9 +95,17 @@ impl<R: IcebergReader> IndexBuilder for IcebergIndexBuilder<R> {
             snapshot_by_table.insert(table, snapshot);
         }
 
+        // *(task IX3, revised)* Keep only the nodes this partition owns —
+        // everything downstream (topology, property index, node_records)
+        // operates on `nodes` after this filter, so nothing beyond this
+        // point needs to know about `n_partitions`/`partition` again.
+        // With `n_partitions == 1` (every Phase 1 call site) this keeps
+        // every node, matching the old mono-partition behavior exactly.
+        nodes.retain(|(_, row)| partition_of(row.id, self.n_partitions) == partition.0);
+
         let node_count = nodes.len() as u64;
         let edge_count = edges.len() as u64;
-        let topology = build_topology(&nodes, &edges);
+        let topology = build_topology(partition, &nodes, &edges, self.n_partitions);
         let properties = build_property_index(&self.schema, &nodes);
         // Consumes `nodes` — nothing needs the scanned rows after this,
         // so this moves the already-read properties instead of cloning
@@ -111,8 +143,17 @@ impl<R: IcebergReader> IndexBuilder for IcebergIndexBuilder<R> {
 
 /// *(tasks IX1, IX2)* Builds outgoing and incoming CSR arrays from the
 /// scanned rows. `node_ids`/`id_to_local` are shared by both directions
-/// since they only depend on which nodes exist, not on the edges.
-fn build_topology(nodes: &[(Label, NodeRow)], edges: &[(EdgeType, EdgeRow)]) -> TopologicalIndex {
+/// since they only depend on which nodes exist, not on the edges. `nodes`
+/// is already filtered down to this partition's owned set (see `build`
+/// above) — `id_to_local` therefore only ever contains local nodes,
+/// which is exactly what `build_csr` needs to tell local neighbors from
+/// [`RemoteRef`]s (task IX3).
+fn build_topology(
+    partition: PartitionId,
+    nodes: &[(Label, NodeRow)],
+    edges: &[(EdgeType, EdgeRow)],
+    n_partitions: u32,
+) -> TopologicalIndex {
     let node_ids: Vec<NodeId> = nodes.iter().map(|(_, row)| row.id).collect();
     let id_to_local: HashMap<NodeId, LocalIdx> = node_ids
         .iter()
@@ -120,8 +161,22 @@ fn build_topology(nodes: &[(Label, NodeRow)], edges: &[(EdgeType, EdgeRow)]) -> 
         .map(|(i, &id)| (id, LocalIdx(i as u32)))
         .collect();
 
-    let (out_offsets, out_entries) = build_csr(&node_ids, &id_to_local, edges, true);
-    let (in_offsets, in_entries) = build_csr(&node_ids, &id_to_local, edges, false);
+    let (out_offsets, out_entries) = build_csr(
+        partition,
+        &node_ids,
+        &id_to_local,
+        edges,
+        true,
+        n_partitions,
+    );
+    let (in_offsets, in_entries) = build_csr(
+        partition,
+        &node_ids,
+        &id_to_local,
+        edges,
+        false,
+        n_partitions,
+    );
 
     TopologicalIndex {
         node_ids,
@@ -134,10 +189,12 @@ fn build_topology(nodes: &[(Label, NodeRow)], edges: &[(EdgeType, EdgeRow)]) -> 
 }
 
 fn build_csr(
+    partition: PartitionId,
     node_ids: &[NodeId],
     id_to_local: &HashMap<NodeId, LocalIdx>,
     edges: &[(EdgeType, EdgeRow)],
     outgoing: bool,
+    n_partitions: u32,
 ) -> (Vec<u32>, Vec<AdjacencyEntry>) {
     let mut buckets: Vec<Vec<AdjacencyEntry>> = vec![Vec::new(); node_ids.len()];
 
@@ -151,15 +208,28 @@ fn build_csr(
         let Some(&LocalIdx(i)) = id_to_local.get(&owner) else {
             continue;
         };
+        // *(task IX3, revised)* `dst` is local if this partition owns
+        // it. If not, and `dst` genuinely hashes to a *different*
+        // partition, it's a `RemoteRef` scatter-gather (§7.4) hops to.
+        // If `dst` hashes to this same partition but still isn't in
+        // `id_to_local`, that's a genuine data mismatch (the node is
+        // simply missing from Iceberg) rather than a remote reference —
+        // fabricating a `RemoteRef` back to the partition that just
+        // failed to find it would only move the same "missing data"
+        // problem one network hop later, so this still silently drops
+        // the neighbor, same as Phase 1.
         let dst_local = id_to_local.contains_key(&dst).then_some(dst);
+        let dst_home = PartitionId(partition_of(dst, n_partitions));
+        let dst_remote = (dst_local.is_none() && dst_home != partition).then_some(RemoteRef {
+            partition: dst_home,
+            node: dst,
+        });
 
         buckets[i as usize].push(AdjacencyEntry {
             edge_id: row.id,
             edge_type: edge_type.clone(),
             dst_local,
-            // IX3: no-op in Phase 1 — every partition owns the whole
-            // graph, so there's never a *remote* destination to flag.
-            dst_remote: None,
+            dst_remote,
         });
     }
 
@@ -339,7 +409,9 @@ mod tests {
             )])),
         };
 
-        let builder = IcebergIndexBuilder::new(reader, small_social_schema());
+        // n_partitions: 1 - mono-partition, matches every existing Phase
+        // 1 test's expectation that nothing is ever remote.
+        let builder = IcebergIndexBuilder::new(reader, small_social_schema(), 1);
         builder
             .build(PartitionId(0), &[Label("Person".to_string())])
             .await
@@ -385,15 +457,78 @@ mod tests {
     }
 
     /// *(task IX3, folded into the same fixture)* Every adjacency entry
-    /// is local in Phase 1 — `dst_remote` is always `None`.
+    /// is local when the builder is mono-partition (`n_partitions: 1`) —
+    /// `dst_remote` is always `None`.
     #[tokio::test]
-    async fn no_adjacency_entry_is_ever_remote_in_phase_one() {
+    async fn no_adjacency_entry_is_ever_remote_when_mono_partition() {
         let gen = build_test_generation().await;
         for node in gen.topology.node_ids() {
             for entry in gen.topology.out_neighbors(*node) {
                 assert!(entry.dst_remote.is_none());
             }
         }
+    }
+
+    /// *(task IX3, revised)* With `n_partitions > 1`, an edge whose
+    /// destination hashes to a *different* partition than the one being
+    /// built shows up as a [`RemoteRef`] instead of being dropped, and a
+    /// destination hashing to the *same* partition stays local.
+    #[tokio::test]
+    async fn remote_edges_are_flagged_as_remote_ref_across_partitions() {
+        let n_partitions = 4u32;
+        // Brute-force two node ids known to land on partition 0 and on
+        // some other partition respectively — the exact hash output for
+        // a given id isn't something a test should hardcode, only that
+        // the builder respects whatever it is.
+        let mut local_id = None;
+        let mut remote_id = None;
+        for candidate in 1..10_000u64 {
+            let p = partition_of(NodeId(candidate), n_partitions);
+            if p == 0 && local_id.is_none() {
+                local_id = Some(candidate);
+            } else if p != 0 && remote_id.is_none() {
+                remote_id = Some(candidate);
+            }
+            if local_id.is_some() && remote_id.is_some() {
+                break;
+            }
+        }
+        let local_id = local_id.expect("found an id hashing to partition 0");
+        let remote_id = remote_id.expect("found an id hashing to a non-zero partition");
+
+        let reader = FakeReader {
+            nodes: Mutex::new(HashMap::from([(
+                "Person".to_string(),
+                // Both nodes present in Iceberg (as every replica scans
+                // every row, §4.1) — `remote_id` still won't end up
+                // local to this build, since it's filtered by ownership.
+                vec![node(local_id, "Alice", 1985), node(remote_id, "Bob", 1990)],
+            )])),
+            edges: Mutex::new(HashMap::from([(
+                "KNOWS".to_string(),
+                vec![edge(100, local_id, remote_id)],
+            )])),
+        };
+
+        let builder = IcebergIndexBuilder::new(reader, small_social_schema(), n_partitions);
+        let gen = builder
+            .build(PartitionId(0), &[Label("Person".to_string())])
+            .await
+            .expect("build should succeed");
+
+        assert!(gen.topology.contains(NodeId(local_id)));
+        assert!(!gen.topology.contains(NodeId(remote_id)));
+
+        let out = gen.topology.out_neighbors(NodeId(local_id));
+        assert_eq!(out.len(), 1);
+        assert!(out[0].dst_local.is_none());
+        let remote = out[0].dst_remote.expect("Bob should be a RemoteRef");
+        assert_eq!(remote.node, NodeId(remote_id));
+        assert_eq!(
+            remote.partition,
+            PartitionId(partition_of(NodeId(remote_id), n_partitions))
+        );
+        assert_ne!(remote.partition, PartitionId(0));
     }
 
     /// *(task IX7)* Equality lookup returns the right `NodeId`.
@@ -478,7 +613,7 @@ mod tests {
                 node_count: 999,
                 edge_count: 999,
             },
-            topology: build_topology(&[], &[]),
+            topology: build_topology(PartitionId(0), &[], &[], 1),
             properties: build_property_index(&small_social_schema(), &[]),
             node_records: HashMap::new(),
         };

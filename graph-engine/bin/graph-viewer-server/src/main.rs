@@ -34,9 +34,10 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let coordinator_addr =
-        std::env::var("GRAPH_COORDINATOR_ADDR").unwrap_or_else(|_| "http://127.0.0.1:7000".to_string());
-    let static_dir = std::env::var("GRAPH_VIEWER_STATIC_DIR").unwrap_or_else(|_| "viewer".to_string());
+    let coordinator_addr = std::env::var("GRAPH_COORDINATOR_ADDR")
+        .unwrap_or_else(|_| "http://127.0.0.1:7000".to_string());
+    let static_dir =
+        std::env::var("GRAPH_VIEWER_STATIC_DIR").unwrap_or_else(|_| "viewer".to_string());
     let listen_addr: SocketAddr = std::env::var("GRAPH_VIEWER_LISTEN_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
         .parse()?;
@@ -62,7 +63,10 @@ struct QueryRequest {
     dsl: String,
 }
 
-async fn run_query(State(state): State<AppState>, Json(req): Json<QueryRequest>) -> impl IntoResponse {
+async fn run_query(
+    State(state): State<AppState>,
+    Json(req): Json<QueryRequest>,
+) -> impl IntoResponse {
     match execute(&state.coordinator_addr, &req.dsl).await {
         Ok(rows) => (StatusCode::OK, Json(json!({ "rows": rows }))).into_response(),
         Err(QueryError::Connect(err)) => (
@@ -98,7 +102,9 @@ async fn execute(addr: &str, dsl: &str) -> Result<Vec<JsonValue>, QueryError> {
         .map_err(QueryError::Connect)?;
 
     let mut stream = client
-        .execute_query(ExecuteQueryRequest { dsl: dsl.to_string() })
+        .execute_query(ExecuteQueryRequest {
+            dsl: dsl.to_string(),
+        })
         .await
         .map_err(QueryError::Grpc)?
         .into_inner();

@@ -8,3 +8,11 @@ graph-schema.workspace = true
 graph-index.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
+xxhash-rust.workspace = true
+kube = { version = "0.95", default-features = false, features = ["client", "rustls-tls", "runtime"] }
+k8s-openapi = { version = "0.23", features = ["v1_29"] }
+tokio = { workspace = true }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }

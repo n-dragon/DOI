@@ -8,3 +8,4 @@ serde.workspace = true
 thiserror.workspace = true
 pest.workspace = true
 pest_derive.workspace = true
+xxhash-rust.workspace = true

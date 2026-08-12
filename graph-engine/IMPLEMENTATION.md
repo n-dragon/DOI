@@ -2,9 +2,11 @@
 
 Ce document complète `ARCHITECTURE.md` (qui montre le flux d'une requête
 de bout en bout) en détaillant, crate par crate : son rôle exact, ce
-qu'elle expose, de quoi elle dépend, ce qui est déjà écrit (squelette) et
-ce qu'il reste à implémenter. Sert de feuille de route pour la Phase 0/1
-(spec §12).
+qu'elle expose, de quoi elle dépend, ce qui est déjà écrit et ce qu'il
+reste à implémenter. Sert de feuille de route pour la Phase 0/1/2 (spec
+§12) — Phase 0/1/2 sont désormais toutes terminées ; ce qui suit
+documente aussi les décisions prises pendant l'implémentation (pas
+seulement l'état "fait/reste à faire").
 
 ---
 
@@ -127,15 +129,28 @@ vie d'une génération d'index. C'est la crate la plus dense du workspace.
 mécanisme de swap atomique complet et fonctionnel (`ArcSwap` gère déjà le
 "les requêtes en cours gardent l'ancienne génération jusqu'à leur fin").
 
-**Reste à faire (Phase 1).**
-- `IndexBuilder::build` : scanner les tables via `IcebergReader`, filtrer
-  aux nœuds/arêtes appartenant à la partition (via `graph-cluster::PartitionHasher`),
-  construire les tableaux CSR (calcul des offsets, tri par nœud source)
-  et les B-Tree de propriété (seulement pour les propriétés `indexed:
-  true` du schéma).
-- Support des requêtes par plage (`WHERE friend.birth_year > 1990`) sur
-  `PropertyIndex` — actuellement seule l'égalité (`lookup_eq`) est câblée.
-- Décider la valeur par défaut de l'intervalle de rebuild (§5.3, `TBD`).
+**Fait (Phase 1) — complément.** `IndexBuilder::build` scanne via
+`IcebergReader`, construit les tableaux CSR et les B-Tree de propriété
+(IX1-IX8) ; `PropertyIndex::lookup_range` couvre `WHERE x > y` (IX5).
+
+**Fait (Phase 2, IX3 révisée).** Le builder est maintenant réellement
+partition-aware : `IcebergIndexBuilder::new` prend un `n_partitions` et
+filtre les nœuds scannés à ceux dont `graph_schema::partitioning::
+partition_of(node_id, n_partitions) == partition` avant de construire
+CSR/index de propriété/`node_records` — plus aucun code en aval n'a
+besoin de refiltrer. Une arête dont l'autre extrémité n'est pas locale
+devient un `RemoteRef{partition, node}` réel (calculé via la même
+fonction) plutôt que `None` systématique — sauf si cette extrémité
+hache vers la partition en cours de construction sans y être trouvée
+(incohérence de données réelle, pas une référence distante : toujours
+droppée silencieusement, comportement Phase 1 inchangé pour ce cas).
+`n_partitions: 1` (tous les appels Phase 1 existants) reproduit
+exactement l'ancien comportement mono-partition. Testé explicitement
+(`remote_edges_are_flagged_as_remote_ref_across_partitions`), en plus du
+test Phase 1 renommé (`no_adjacency_entry_is_ever_remote_when_mono_partition`).
+
+**Reste à faire.** Décider la valeur par défaut de l'intervalle de
+rebuild (§5.3, `TBD`).
 
 ---
 
@@ -192,13 +207,27 @@ transforme une `Query` validée en plan, puis l'exécute soit localement
 - `Planner` : trait à implémenter — `Query` → `QueryPlan`.
 - `LocalExecutor` : trait à implémenter — exécute un `PlanStep` contre un
   `GenerationHandle` local (property lookup ou expansion CSR).
-- `DistributedExecutor` : trait à implémenter — la boucle scatter-gather
-  complète (§7.4, Figure 2 du diagramme d'architecture) : fan-out du plan
-  vers les partitions concernées, dédoublonnage, ré-émission au hop
-  suivant.
+- `PartitionRpc` : trait à implémenter — la frontière RPC coordinateur ↔
+  partition, indépendante de `graph-proto`/`tonic` (voir plus bas).
+- `ScatterGatherExecutor<R: PartitionRpc>` — la boucle scatter-gather
+  complète (§7.4) : diffusion de `ResolveStart`, `ExpandHop` décomposé en
+  rounds réseau par hop, re-routage des `RemoteRef`, dédoublonnage,
+  évaluation `WHERE` après coup. Remplace le trait stub
+  `DistributedExecutor` (jamais implémenté avant Phase 2, signature
+  `-> Result<(), _>` sans même de moyen de récupérer les résultats).
 
-**Dépend de** : `graph-schema`, `graph-dsl`, `graph-index`. **Dépendent
-d'elle** : les deux binaires.
+**Dépend de** : `graph-schema`, `graph-dsl`, `graph-index`,
+`graph-cluster` (types de placement — `PartitionHasher`, `PartitionMap`,
+`ReplicaEndpoint`), `graph-storage` (`NodeRecord`/`PropertyValue`, pour
+`GetNodeProperties`). **Dépendent d'elle** : les deux binaires.
+
+Volontairement **pas** de dépendance sur `graph-proto`/`tonic` : le
+`PartitionRpc` que `ScatterGatherExecutor` consomme est un trait défini
+dans `graph-query` lui-même ; `bin/graph-coordinator` l'implémente contre
+le vrai client gRPC (`grpc_partition_rpc::GrpcPartitionRpc`, Phase 2/CO5),
+un test (Q8) l'implémente en mémoire contre deux `SimpleLocalExecutor`.
+Le planificateur/exécuteur reste donc testable sans serveur gRPC qui
+tourne.
 
 **Fait (Phase 1, Q1-Q4).** Tous les types intermédiaires et contrats. Le
 découplage `LocalExecutor`/`DistributedExecutor` est déjà posé :
@@ -212,9 +241,18 @@ seul filtre d'égalité ; comparaisons d'alias (`colleague <> p`) non
 appliquées ; filtres `WHERE` évalués en fin d'`ExpandHop` plutôt que
 poussés hop par hop (l'optimisation que §7.3 laisse `TBD`).
 
-**Reste à faire.**
-- Phase 2 : `DistributedExecutor` — utilise `graph-cluster::PartitionMap`
-  pour router chaque étape vers les bonnes répliques via `graph-proto`.
+**Fait (Phase 2, Q5-Q8).** `ScatterGatherExecutor` complet — `ResolveStart`
+diffusé à toutes les partitions (l'index de propriété est local à chaque
+partition, §5.2 — pas d'index global v1, à la différence d'une lecture
+littérale de la tâche Q5 d'origine qui envisageait un simple routage par
+hash), `ExpandHop` décomposé en rounds réseau par hop physique (lecture
+littérale du §7.4 plutôt qu'envoyer toute la plage `*min..max` à une
+seule partition), `WHERE` évalué une fois par étape via
+`GetNodeProperties` (commute avec l'union, donc équivalent au push-down
+par index de propriété sans avoir à router un lookup filtré arbitraire
+vers chaque partition), déduplication par clé `(alias, node_id)` triée.
+Testé bout en bout avec un franchissement réel de frontière de partition
+(Q8). Détail complet des décisions dans `TASKS.md`.
 
 ---
 
@@ -271,17 +309,23 @@ jamais toucher au nombre de partitions logiques (§6.2, décision actée).
 `graph-coordinator` (routage), `graph-partition-node` (connaître sa propre
 affectation).
 
-**Fait.** Tous les types de placement, `PartitionHasher` (avec un hash
-placeholder à remplacer), `PartitionMap::healthy_replicas`.
-
-**Reste à faire (Phase 2).**
-- Choisir une fonction de hash stable (ex: xxhash) et la figer
-  définitivement — elle ne doit plus jamais changer une fois le graphe créé.
-- `Discovery` : implémentation Kubernetes (crate `kube` — API
-  Pods/Endpoints ou headless Service, §6.3/§10).
-- `RebalancePlanner` : stratégie concrète (minimiser le déplacement de
-  données, équilibrer la charge) — non détaillée dans le spec au-delà du
-  principe "réaffecter, jamais rehasher" (§6.2).
+**Fait (Phase 2, CL1-CL4).**
+- `PartitionHasher` : hash réel (xxh3, `xxhash-rust`), formule canonique
+  déplacée dans `graph_schema::partitioning` pour que `graph-index`
+  puisse l'utiliser aussi sans cycle de dépendance (voir
+  `ARCHITECTURE.md` §2.1).
+- `Discovery` : `KubernetesDiscovery` (`kube::Api<Pod>`, pas
+  `Endpoints`/`EndpointSlice` — la propriété de partition est portée par
+  une annotation Pod `graph.io/partitions`, lue ici, calculée par
+  `RebalancePlanner` ailleurs) et `StaticDiscovery` (adresses fixes, pour
+  le dev/tests et tout déploiement non-Kubernetes).
+- `RebalancePlanner` : `RendezvousRebalancePlanner` — hachage de
+  rendez-vous (HRW), pas un simple modulo (qui reréassignerait la
+  majorité des partitions à chaque changement de machine, contredisant
+  "seules les partitions déplacées sont reconstruites", §6.2). Testé :
+  placement initial, perturbation minimale à l'ajout d'une machine,
+  idempotence.
+- `PartitionMap::healthy_replicas` testé explicitement (CL4).
 
 ---
 
@@ -291,48 +335,83 @@ placeholder à remplacer), `PartitionMap::healthy_replicas`.
 divergent pas sur les noms de métriques ou la configuration du tracing.
 
 **Ce qu'elle expose.** Module `metrics` (constantes de noms Prometheus,
-alignées sur la liste de §9.1), `init_tracing`, `TraceContext`.
+chacune adossée à un collecteur `prometheus` réellement enregistré),
+`render`/`metrics_router`/`serve_metrics` (endpoint `/metrics`),
+`init_tracing`, `inject_trace_context`/`extract_and_continue`
+(interceptors `tonic`, remplacent le struct `TraceContext` placeholder,
+supprimé).
 
-**Dépend de** : `tracing` uniquement. **Dépendent d'elle** : les deux
-binaires.
+**Dépend de** : `tracing`, `tracing-subscriber`, `opentelemetry`/
+`opentelemetry_sdk`/`opentelemetry-otlp`, `tracing-opentelemetry`,
+`prometheus`, `axum`, `tonic` (pour le type des interceptors),
+`tokio`. **Dépendent d'elle** : les deux binaires.
 
-**Fait.** Les noms de métriques figés, les points d'entrée en place
-(appelés dès `main()` dans les deux binaires).
+**Fait (Phase 2, OB1-OB4).**
+- `init_tracing` : `tracing-subscriber` (JSON + `EnvFilter`) toujours
+  actif ; exporteur OTLP en plus si un collecteur est configuré/
+  joignable — **transport HTTP**, pas gRPC, pour éviter d'épingler une
+  seconde version de `tonic` dans l'arbre de dépendances rien que pour
+  l'exportateur (elles coexistent sans conflit de toute façon — `cargo
+  build` le confirme — mais HTTP évite la question). Un collecteur
+  injoignable ne bloque jamais le démarrage : repli sur JSON seul avec
+  une ligne d'avertissement (l'observabilité est une aide opérationnelle,
+  pas une dépendance de disponibilité).
+- `inject_trace_context`/`extract_and_continue` : propagation réelle du
+  contexte via les métadonnées gRPC (propagateur W3C `traceparent` par
+  défaut d'OpenTelemetry), câblés respectivement dans
+  `GrpcPartitionRpc::client` (`bin/graph-coordinator`) et
+  `PartitionServiceServer::with_interceptor` (`bin/graph-partition-node`).
+- `/metrics` (`serve_metrics`, port dédié — convention Prometheus
+  standard) sur les deux binaires. Points d'instrumentation réels câblés
+  aux endroits représentatifs : latence/erreurs/hops de requête
+  (`GraphServiceImpl::execute_query`), taille d'index/durée de
+  rebuild/âge de snapshot (`rebuild.rs`), latence de hop local
+  (`PartitionServiceImpl::expand_hop`).
 
-**Reste à faire.**
-- Câblage réel `tracing-subscriber` + exporteur OpenTelemetry (§9.2) et
-  logs JSON structurés (§9.3 — détail retenu comme `TBD` dans le spec).
-- Propagation du `TraceContext` sur chaque appel gRPC coordinateur →
-  partition (interceptor `tonic`), pour qu'une requête reste une seule
-  trace connectée à travers le fan-out (§9.2).
-- Exposition de l'endpoint `/metrics` (Prometheus) sur chaque binaire.
+**Reste à faire.** `CROSS_PARTITION_HOP_RATIO` (§9.1) reste déclaré
+(exposé dès le démarrage sur `/metrics`, cohérent avec les autres) mais
+pas encore observé en pratique dans `ScatterGatherExecutor`.
 
 ---
 
-## bin/graph-coordinator — ✅ terminé (Phase 1, mode mono-partition)
+## bin/graph-coordinator — ✅ terminé (Phase 1 + Phase 2, mode distribué)
 
 **Rôle.** Process réseau implémentant `GraphService` — le rôle
 coordinateur (§6.1), déployé en `Deployment` Kubernetes (§10).
 
 **Dépend de** : `graph-dsl`, `graph-index`, `graph-query`, `graph-proto`,
-`graph-observability`. (`graph-cluster` seulement à partir de CO5,
-Phase 2 — mono-partition v1 n'a rien à découvrir.)
+`graph-observability`, `graph-cluster`, `graph-storage`.
 
 **Ce qu'elle expose.** Un `[lib]` en plus du binaire (`config`,
-`remote_executor`, `service`) — nécessaire pour que le test d'intégration
-CO4 puisse instancier un vrai `GraphServiceImpl` sans dupliquer le code.
+`grpc_partition_rpc`, `service`) — nécessaire pour que le test
+d'intégration CO4 puisse instancier un vrai `GraphServiceImpl` sans
+dupliquer le code.
 
-**Fait (CO1-CO4).** `GraphServiceImpl` complet : `get_schema`,
-`execute_query` (parse → valide → plan → `remote_executor::execute`,
-qui traduit chaque `PlanStep` en appel gRPC réel contre le nœud de
-partition configuré → projette `RETURN` → streame), `get_index_status`
-(relaie celui du nœud de partition), `health_check`. Config via
-variables d'environnement (`GRAPH_SCHEMA_PATH`,
-`GRAPH_PARTITION_NODE_ADDR`, `GRAPH_COORDINATOR_LISTEN_ADDR`).
+**Fait (CO1-CO4, Phase 1).** `GraphServiceImpl` : `get_schema`,
+`get_index_status`, `health_check`.
 
-**Reste à faire (Phase 2).** `DistributedExecutor`/CO5 : remplacer
-l'appel direct à un seul nœud de partition par un vrai scatter-gather via
-`graph_cluster::Discovery` une fois plus d'une partition existe.
+**Fait (CO5, Phase 2).** `remote_executor.rs` (l'ancien chemin
+mono-partition dédié, un seul `PartitionServiceClient` stocké) est
+**supprimé**, remplacé par `grpc_partition_rpc::GrpcPartitionRpc` —
+implémente `graph_query::PartitionRpc` contre le vrai client gRPC
+généré, avec un cache de connexions par adresse de réplique et
+l'interceptor de trace (`inject_trace_context`, OB3) appliqué à chaque
+client. `execute_query` : parse → valide → plan → interroge
+`graph_cluster::Discovery` pour la `PartitionMap` courante →
+`ScatterGatherExecutor::execute` → hydrate `RETURN` via
+`ScatterGatherExecutor::get_node_properties` (groupé par partition
+propriétaire) → streame. Pas de branche de code séparée pour le cas
+mono-partition — le même exécuteur gère `n_partitions: 1` correctement
+(une seule partition à diffuser/router), validé par CO4 qui tourne
+maintenant à travers ce chemin. `Config` : `GRAPH_DISCOVERY_MODE`
+(`static` — `GRAPH_PARTITION_NODE_ADDRS`, ou `kubernetes` —
+`GRAPH_K8S_NAMESPACE`/`GRAPH_K8S_LABEL_SELECTOR`/`GRAPH_K8S_PARTITION_PORT`),
+`GRAPH_N_PARTITIONS`, `GRAPH_COORDINATOR_METRICS_LISTEN_ADDR` (OB4).
+
+**Gap documenté.** `get_index_status` relaie la partition de plus petit
+id comme échantillon représentatif plutôt que d'agréger l'état des N
+partitions — `IndexStatusResponse` (§8.2) n'a pas été conçu pour une vue
+multi-partitions ; pas une TBD bloquante, juste non résolue ici.
 
 ---
 
@@ -348,15 +427,31 @@ types du plan), `graph-query`, `graph-proto`, `graph-observability`.
 **Ce qu'elle expose.** Un `[lib]` en plus du binaire (`config`,
 `rebuild`, `service`), pour la même raison que `graph-coordinator`.
 
-**Fait (PN1-PN5).** `rebuild::bootstrap` (premier build synchrone) et
-`rebuild::periodic_rebuild_loop` (rebuild périodique, `swap` atomique en
-cas de succès, ancienne génération conservée et erreur logguée sinon) ;
-`PartitionServiceImpl` complet : `resolve_start`/`expand_hop` (délégation
-à `graph_query::SimpleLocalExecutor`, traduction wire ↔ types du plan),
-`get_index_status`, `health_check`. Config via variables d'environnement
+**Fait (PN1-PN5, Phase 1).** `rebuild::bootstrap` (premier build
+synchrone) et `rebuild::periodic_rebuild_loop` (rebuild périodique,
+`swap` atomique en cas de succès, ancienne génération conservée et
+erreur logguée sinon) ; `PartitionServiceImpl` complet :
+`resolve_start`/`expand_hop` (délégation à `graph_query::
+SimpleLocalExecutor`, traduction wire ↔ types du plan), `get_index_status`,
+`health_check`. Config via variables d'environnement
 (`GRAPH_SCHEMA_PATH`, `GRAPH_WAREHOUSE_PATH`, `GRAPH_NAMESPACE`,
 `GRAPH_PARTITION_ID`, `GRAPH_N_PARTITIONS`, `GRAPH_REBUILD_INTERVAL_SECS`,
 `GRAPH_PARTITION_LISTEN_ADDR`).
+
+**Fait (Phase 2, câblage CO5/OB3/OB4).**
+- `IcebergIndexBuilder` reçoit maintenant `config.n_partitions` (au lieu
+  d'un `1` implicite) — les rebuilds filtrent réellement aux nœuds
+  possédés et calculent les `RemoteRef` réels (IX3 révisée).
+- `expand_hop` fusionne `Frontier.local` et `Frontier.remote` dans le
+  même flux de réponse gRPC (voir `TASKS.md`, note de contrat réseau
+  rattachée à CO5) — pas de changement de `graph.proto`.
+- Le service est enveloppé par `PartitionServiceServer::with_interceptor`
+  (`extract_and_continue`, OB3) : chaque RPC entrant hérite du contexte
+  de trace du coordinateur avant même d'atteindre `PartitionServiceImpl`.
+- `/metrics` (`GRAPH_PARTITION_METRICS_LISTEN_ADDR`, OB4) exposé en
+  tâche de fond ; `rebuild.rs` observe durée de build, taille d'index,
+  âge de snapshot ; `PartitionServiceImpl::expand_hop` observe la
+  latence de hop local.
 
 **Test d'intégration (CO4, côté `graph-coordinator`).** Lance un vrai
 `PartitionServiceImpl` et un vrai `GraphServiceImpl`, tous deux servant
@@ -433,7 +528,7 @@ vérifier en CLI), `GRAPH_CATALOG_DB_PATH`/`GRAPH_WAREHOUSE_PATH`/
    bout en bout avant d'attaquer la distribution.
 6. **`graph-cluster`** — hash stable, `Discovery` Kubernetes,
    `RebalancePlanner`.
-7. **`graph-query::DistributedExecutor`** — le scatter-gather réel
+7. **`graph-query::ScatterGatherExecutor`** — le scatter-gather réel
    (Phase 2, §12), maintenant que `graph-cluster` sait router.
 8. **`graph-observability`** — le câblage tracing/métriques réel peut être
    fait en parallèle de n'importe quelle étape ci-dessus, mais devient

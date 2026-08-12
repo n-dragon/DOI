@@ -6,20 +6,24 @@
 //!   property index, expand one hop via the topological index — this is
 //!   the unit of work a `graph-partition-node` process performs, and it's
 //!   also the whole story for the single-node MVP (spec §12 Phase 1).
-//! - **Distributed** (`DistributedExecutor`, spec §7.4): the coordinator's
-//!   scatter-gather loop — send the current frontier to every partition it
-//!   touches, collect responses, re-dispatch for the next hop. No
-//!   peer-to-peer message passing (decision recorded in spec §7.4).
+//! - **Distributed** (`ScatterGatherExecutor`, tasks Q5-Q7, spec §7.4):
+//!   the coordinator's scatter-gather loop — send the current frontier to
+//!   every partition it touches, collect responses, re-dispatch for the
+//!   next hop. No peer-to-peer message passing (decision recorded in
+//!   spec §7.4). See `distributed_executor`'s doc comment for the
+//!   concrete design and the decisions taken while implementing it.
 
+mod distributed_executor;
 mod local_executor;
 mod planner;
 
+pub use distributed_executor::{PartitionRpc, ScatterGatherExecutor};
 pub use local_executor::SimpleLocalExecutor;
 pub use planner::NaivePlanner;
 
 use async_trait::async_trait;
 use graph_dsl::Query;
-use graph_index::{GenerationHandle, PartitionId, PropertyKey, RemoteRef};
+use graph_index::{GenerationHandle, PropertyKey, RemoteRef};
 use graph_schema::NodeId;
 use std::collections::HashMap;
 
@@ -92,6 +96,15 @@ pub enum ExecutionError {
     NoIndex,
     #[error("plan step referenced unknown alias: {0}")]
     UnknownAlias(String),
+    /// *(task Q5, `PartitionRpc` implementations)* A [`PartitionRpc`]
+    /// call failed — connection refused, a partition-node returned an
+    /// RPC error, etc. Distinct from `UnknownAlias`/`NoIndex` (which are
+    /// planner/executor logic errors local to this process) since a
+    /// caller may reasonably want to distinguish "this query is
+    /// malformed" from "a partition was unreachable" — the latter is a
+    /// transient cluster-health condition, not a query bug.
+    #[error("partition RPC failed: {0}")]
+    Rpc(String),
 }
 
 /// Executes plan steps against a single partition's currently-served index
@@ -115,17 +128,10 @@ pub trait LocalExecutor {
     ) -> Result<Frontier, ExecutionError>;
 }
 
-/// The coordinator's scatter-gather loop (§7.4): for each plan step, fan
-/// the current frontier out to every partition it touches (via
-/// `graph-proto`'s partition-facing RPC), await responses, merge
-/// (dedup only — no aggregation, §7.1) and move to the next step. Results
-/// are streamed to the client as they're finalized (§7.5), not
-/// materialized in full.
-#[async_trait]
-pub trait DistributedExecutor {
-    async fn execute(
-        &self,
-        plan: &QueryPlan,
-        target_partitions: &[PartitionId],
-    ) -> Result<(), ExecutionError>;
-}
+// The coordinator's scatter-gather loop (§7.4) is `ScatterGatherExecutor`
+// (tasks Q5-Q7, `distributed_executor.rs`) — this used to be a bare trait
+// stub (`DistributedExecutor::execute(..) -> Result<(), _>`, no way to
+// even get results out) ahead of Phase 2 actually implementing it; now
+// superseded by a concrete struct generic over `PartitionRpc`, which
+// *does* return the resolved bindings, since a real coordinator needs
+// them for `RETURN` projection.

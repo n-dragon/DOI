@@ -106,9 +106,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (2, "vpc-prod", "vpc", "us-east-1", false, 0),
         (3, "subnet-prod-a", "subnet", "us-east-1", false, 0),
         (4, "i-checkout-api-1", "ec2_instance", "us-east-1", true, 94),
-        (5, "i-checkout-api-2", "ec2_instance", "us-east-1", false, 94),
+        (
+            5,
+            "i-checkout-api-2",
+            "ec2_instance",
+            "us-east-1",
+            false,
+            94,
+        ),
         (6, "vol-checkout-api-1", "ebs_volume", "us-east-1", false, 0),
-        (7, "snap-checkout-api-1", "ebs_snapshot", "us-east-1", false, 0),
+        (
+            7,
+            "snap-checkout-api-1",
+            "ebs_snapshot",
+            "us-east-1",
+            false,
+            0,
+        ),
         (8, "rds-orders-db", "rds_instance", "us-east-1", true, 21),
     ];
     let resource_schema = IcebergSchema::builder()
@@ -225,10 +239,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_schema_id(0)
         .with_fields(vec![
             NestedField::required(1, "node_id", IcebergType::Primitive(PrimitiveType::Long)).into(),
-            NestedField::required(2, "role_name", IcebergType::Primitive(PrimitiveType::String))
-                .into(),
-            NestedField::required(3, "is_admin", IcebergType::Primitive(PrimitiveType::Boolean))
-                .into(),
+            NestedField::required(
+                2,
+                "role_name",
+                IcebergType::Primitive(PrimitiveType::String),
+            )
+            .into(),
+            NestedField::required(
+                3,
+                "is_admin",
+                IcebergType::Primitive(PrimitiveType::Boolean),
+            )
+            .into(),
         ])
         .build()?;
     let role_batch = RecordBatch::try_new(

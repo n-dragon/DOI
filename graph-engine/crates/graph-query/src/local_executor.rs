@@ -74,6 +74,7 @@ impl LocalExecutor for SimpleLocalExecutor {
 
         let generation = index.acquire();
         let mut local = Vec::new();
+        let mut remote = Vec::new();
         let mut seen_per_binding: HashSet<(usize, NodeId)> = HashSet::new();
 
         for (binding_idx, binding) in frontier.iter().enumerate() {
@@ -95,11 +96,26 @@ impl LocalExecutor for SimpleLocalExecutor {
                                 continue;
                             }
                         }
-                        // Phase 1 (IX3): dst_remote is never populated, so
-                        // there's nothing to hand off to a remote
-                        // partition here yet - that's Phase 2's Q5-Q8.
                         if let Some(dst) = entry.dst_local {
                             next.insert(dst);
+                        } else if let Some(remote_ref) = entry.dst_remote {
+                            // *(task Q6)* This partition can't continue the
+                            // BFS past a cross-partition edge — it hands
+                            // the binding-so-far back to the coordinator's
+                            // `DistributedExecutor`, which re-seeds its own
+                            // next scatter round from `remote_ref.node` on
+                            // `remote_ref.partition` (see
+                            // `graph_query::distributed_executor`'s doc
+                            // comment for why this only needs to handle a
+                            // single graph-hop per call in the distributed
+                            // case — `hops` is always `{1,1}` there, so
+                            // there's no "how many hops remain" to track:
+                            // every remote hand-off starts a fresh round).
+                            if seen_per_binding.insert((binding_idx, remote_ref.node)) {
+                                let mut extended = binding.clone();
+                                extended.insert(to_alias.clone(), remote_ref.node);
+                                remote.push((remote_ref, extended));
+                            }
                         }
                     }
                 }
@@ -126,10 +142,7 @@ impl LocalExecutor for SimpleLocalExecutor {
             filters,
             local,
         )?;
-        Ok(Frontier {
-            local,
-            remote: Vec::new(),
-        })
+        Ok(Frontier { local, remote })
     }
 }
 
@@ -336,7 +349,7 @@ mod tests {
             )])),
         };
 
-        let builder = IcebergIndexBuilder::new(reader, schema);
+        let builder = IcebergIndexBuilder::new(reader, schema, 1);
         let generation = builder
             .build(PartitionId(0), &[Label("Person".to_string())])
             .await

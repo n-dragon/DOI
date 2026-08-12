@@ -11,31 +11,37 @@
 #![allow(clippy::result_large_err)]
 
 use graph_dsl::{ComparisonOp, Direction, HopRange, Literal, PropertyFilter};
-use graph_index::{GenerationHandle, NodeRecord, PropertyKey};
+use graph_index::{GenerationHandle, NodeRecord, PartitionId, PropertyKey};
+use graph_observability::metrics;
 use graph_proto::v1::partition_service_server::PartitionService;
 use graph_proto::v1::value::Kind;
 use graph_proto::v1::{
     health_check_response, Binding as ProtoBinding, ComparisonOp as ProtoComparisonOp,
-    ExpandHopRequest, GetIndexStatusRequest, GetNodePropertiesRequest,
-    GetNodePropertiesResponse, HealthCheckRequest, HealthCheckResponse, IndexStatusResponse,
-    NodeProperties, PropertyFilter as ProtoPropertyFilter, ResolveStartRequest, Value as ProtoValue,
+    ExpandHopRequest, GetIndexStatusRequest, GetNodePropertiesRequest, GetNodePropertiesResponse,
+    HealthCheckRequest, HealthCheckResponse, IndexStatusResponse, NodeProperties,
+    PropertyFilter as ProtoPropertyFilter, ResolveStartRequest, Value as ProtoValue,
 };
 use graph_query::{Binding, LocalExecutor, PlanStep, SimpleLocalExecutor};
 use graph_schema::NodeId;
 use graph_storage::PropertyValue;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 use tonic::{Request, Response, Status};
 
 type BindingStream = Pin<Box<dyn futures::Stream<Item = Result<ProtoBinding, Status>> + Send>>;
 
 pub struct PartitionServiceImpl {
     generation: Arc<GenerationHandle>,
+    partition: PartitionId,
 }
 
 impl PartitionServiceImpl {
-    pub fn new(generation: Arc<GenerationHandle>) -> Self {
-        Self { generation }
+    pub fn new(generation: Arc<GenerationHandle>, partition: PartitionId) -> Self {
+        Self {
+            generation,
+            partition,
+        }
     }
 }
 
@@ -99,12 +105,35 @@ impl PartitionService for PartitionServiceImpl {
             filters,
         };
 
+        let start = Instant::now();
         let result = SimpleLocalExecutor
             .expand_hop(&self.generation, &step, &frontier)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
+        metrics::HOP_LATENCY
+            .with_label_values(&[&self.partition.0.to_string()])
+            .observe(start.elapsed().as_secs_f64());
 
-        Ok(Response::new(bindings_to_stream(result.local)))
+        // *(task CO5)* `result.remote` (task IX3/Q6's cross-partition
+        // continuations) is merged into the same wire stream as
+        // `result.local` rather than getting its own message shape — the
+        // coordinator's `ScatterGatherExecutor::one_round` re-derives
+        // which partition owns each returned binding via
+        // `PartitionHasher` on *every* round regardless of how the
+        // binding got here, so it never actually needs to know which of
+        // these two Rust-side buckets a binding came from once it's back
+        // on the wire. Flattening here avoids a proto/wire contract
+        // change entirely. In mono-partition mode (`n_partitions: 1`,
+        // spec §12 Phase 1) `result.remote` is always empty (IX3 never
+        // populates a `RemoteRef` when every node hashes to the same
+        // partition it's already local to), so this is a no-op for CO2's
+        // existing mono-partition path.
+        let bindings: Vec<Binding> = result
+            .local
+            .into_iter()
+            .chain(result.remote.into_iter().map(|(_, binding)| binding))
+            .collect();
+        Ok(Response::new(bindings_to_stream(bindings)))
     }
 
     async fn get_index_status(
@@ -169,9 +198,7 @@ fn node_record_to_proto(record: &NodeRecord) -> NodeProperties {
         fields: record
             .properties
             .iter()
-            .filter_map(|(name, value)| {
-                property_value_to_proto(value).map(|v| (name.clone(), v))
-            })
+            .filter_map(|(name, value)| property_value_to_proto(value).map(|v| (name.clone(), v)))
             .collect(),
     }
 }

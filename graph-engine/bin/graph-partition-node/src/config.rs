@@ -22,13 +22,16 @@ pub struct Config {
     pub catalog_db_path: PathBuf,
     pub namespace: String,
     pub partition_id: u32,
-    /// Informational only in Phase 1 (mono-partition, IX3 is a no-op) -
-    /// not yet used to filter which nodes/edges this replica owns. Read
-    /// now so it's already part of the config surface once Phase 2's
-    /// partition-aware filtering needs it.
+    /// Fixed for the graph's lifetime (§6.2). Feeds `IcebergIndexBuilder`
+    /// (task IX3, revised for Phase 2), which filters each scan down to
+    /// the nodes `hash(node_id) % n_partitions == partition_id` owns and
+    /// flags cross-partition edges as `RemoteRef`s.
     pub n_partitions: u32,
     pub rebuild_interval: Duration,
     pub listen_addr: SocketAddr,
+    /// *(task OB4)* Separate from `listen_addr` — dedicated Prometheus
+    /// metrics port, same convention as `bin/graph-coordinator`'s.
+    pub metrics_listen_addr: SocketAddr,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -62,6 +65,17 @@ impl Config {
                     "not a valid socket address".to_string(),
                 )
             })?;
+        let metrics_listen_addr = parse_env(
+            "GRAPH_PARTITION_METRICS_LISTEN_ADDR",
+            "0.0.0.0:9101".to_string(),
+        )?
+        .parse()
+        .map_err(|_| {
+            ConfigError::InvalidEnv(
+                "GRAPH_PARTITION_METRICS_LISTEN_ADDR",
+                "not a valid socket address".to_string(),
+            )
+        })?;
 
         Ok(Self {
             schema_path,
@@ -72,6 +86,7 @@ impl Config {
             n_partitions,
             rebuild_interval: Duration::from_secs(rebuild_interval_secs),
             listen_addr,
+            metrics_listen_addr,
         })
     }
 }

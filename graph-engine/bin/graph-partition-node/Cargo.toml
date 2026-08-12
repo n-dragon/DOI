@@ -16,4 +16,5 @@ tonic = { workspace = true }
 async-trait.workspace = true
 thiserror.workspace = true
 futures.workspace = true
+tracing.workspace = true
 iceberg = "0.10.1"

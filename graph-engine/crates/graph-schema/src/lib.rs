@@ -9,6 +9,7 @@
 mod evolution;
 mod grammar;
 mod parser;
+pub mod partitioning;
 
 pub use evolution::SpecSchemaEvolution;
 pub use parser::PestSchemaParser;

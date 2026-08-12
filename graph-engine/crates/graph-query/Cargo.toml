@@ -7,10 +7,12 @@ edition.workspace = true
 graph-schema.workspace = true
 graph-dsl.workspace = true
 graph-index.workspace = true
+graph-cluster.workspace = true
+graph-storage.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
+futures.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-graph-storage.workspace = true
-futures.workspace = true
 tokio = { workspace = true }

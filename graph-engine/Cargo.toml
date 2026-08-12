@@ -46,3 +46,11 @@ arc-swap = "1"
 tracing = "0.1"
 pest = "2"
 pest_derive = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+opentelemetry = "0.24"
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.17", features = ["http-proto", "reqwest-client"] }
+tracing-opentelemetry = "0.25"
+prometheus = "0.13"

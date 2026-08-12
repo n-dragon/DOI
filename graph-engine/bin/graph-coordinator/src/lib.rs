@@ -3,5 +3,5 @@
 //! `GraphServiceImpl` reachable from outside the binary crate.
 
 pub mod config;
-pub mod remote_executor;
+pub mod grpc_partition_rpc;
 pub mod service;

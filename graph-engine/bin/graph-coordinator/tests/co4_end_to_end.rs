@@ -82,7 +82,7 @@ async fn executes_the_k_hop_example_over_real_grpc() {
 
     // -- partition node: real IndexGeneration + real PartitionServiceImpl --
     let reader = IcebergCatalogReader::new(catalog, namespace);
-    let builder = IcebergIndexBuilder::new(reader, schema.clone());
+    let builder = IcebergIndexBuilder::new(reader, schema.clone(), 1);
     let generation = rebuild::bootstrap(&builder, PartitionId(0), &[Label("Person".to_string())])
         .await
         .expect("index should build");
@@ -92,20 +92,31 @@ async fn executes_the_k_hop_example_over_real_grpc() {
         Server::builder()
             .add_service(PartitionServiceServer::new(PartitionServiceImpl::new(
                 handle,
+                PartitionId(0),
             )))
             .serve(PARTITION_ADDR.parse().unwrap()),
     );
 
-    let partition_client = connect_with_retry(|| async {
+    let _partition_client = connect_with_retry(|| async {
         PartitionServiceClient::connect(format!("http://{PARTITION_ADDR}")).await
     })
     .await;
 
     // -- coordinator: real GraphServiceImpl talking to the real partition node --
+    // *(task CO5)* Routed through `ScatterGatherExecutor` +
+    // `graph_cluster::StaticDiscovery` now, rather than a single stored
+    // client — one partition, one replica, pointed at `PARTITION_ADDR`.
+    let discovery: std::sync::Arc<dyn graph_cluster::Discovery + Send + Sync> = std::sync::Arc::new(
+        graph_cluster::StaticDiscovery::single_replica_per_partition(HashMap::from([(
+            0u32,
+            PARTITION_ADDR.parse().unwrap(),
+        )])),
+    );
     let graph_service = graph_coordinator::service::GraphServiceImpl::new(
         schema.clone(),
         SCHEMA_IDL.to_string(),
-        partition_client,
+        discovery,
+        1,
     );
     tokio::spawn(
         Server::builder()
