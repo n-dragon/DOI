@@ -485,6 +485,43 @@
   .pipeline-step:last-child { border-bottom: 0; }
   .pipeline-step .cmd { color: var(--ink); flex: none; width: 116px; }
 
+  .arch-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+
+  .arch-card { padding: 18px 20px; }
+  .arch-card h2 {
+    margin: 0 0 4px;
+    font-size: 14px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .arch-card .arch-choice {
+    color: var(--accent-flow);
+    font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 13px;
+  }
+  .arch-card p { margin: 10px 0 0; font-size: 13px; color: var(--ink-muted); line-height: 1.55; }
+  .arch-card ul { margin: 10px 0 0; padding-left: 18px; font-size: 13px; color: var(--ink-muted); line-height: 1.55; }
+  .arch-card li + li { margin-top: 6px; }
+  .arch-card li b, .arch-card p b { color: var(--ink); font-weight: 600; }
+  .arch-card .caveat {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+    font-size: 12.5px;
+    color: var(--ink-faint);
+  }
+
+  .poc-section { display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px; }
+  .poc-section h2 { margin: 0 0 8px; font-size: 15px; }
+  .poc-section .card { padding: 18px 20px; }
+  .poc-section p { font-size: 13.5px; color: var(--ink-muted); line-height: 1.6; margin: 0 0 10px; }
+  .poc-section p:last-child { margin-bottom: 0; }
+
   footer.page {
     margin-top: 40px;
     padding-top: 20px;
@@ -524,6 +561,10 @@
     <button type="button" role="tab" data-tab="unused" aria-selected="false" aria-controls="panel-unused" id="tab-unused" tabindex="-1">
       Unused permissions
       <span class="tab-sub">which grants were never used?</span>
+    </button>
+    <button type="button" role="tab" data-tab="architecture" aria-selected="false" aria-controls="panel-architecture" id="tab-architecture" tabindex="-1">
+      Architecture
+      <span class="tab-sub">how is this actually built?</span>
     </button>
   </div>
 
@@ -919,6 +960,29 @@ RETURN r, entry, admin, d</textarea>
       That cross-reference is exactly what edge aliases and a correlated
       <code class="mono">NOT EXISTS</code> were added to this DSL for.
     </p>
+
+    <div class="poc-section">
+      <div class="card">
+        <h2>Goal — why a graph engine, not a report</h2>
+        <p>
+          Standard CSPM tooling answers what a role <em>can</em> do, from the declared IAM
+          policy. It has no way to say whether that access was ever <em>exercised</em> — that
+          needs a second, independently-collected signal (access telemetry) joined against the
+          declared grant, per workload, per action, inside a trust window.
+        </p>
+        <p>
+          That join is naturally a graph problem: two paths through the <em>same</em> inventory —
+          declared (<code class="mono">Workload → RUNS_AS → IAMRole → CAN_READ → DataStore</code>)
+          and observed (<code class="mono">Workload → ACCESSED → DataStore</code>) — that have to
+          be correlated node-by-node and edge-property-by-edge-property. A relational join across
+          two tables could express this too, but it wouldn't compose with the rest of the
+          inventory already modeled as one graph (cost, exposure, blast radius). The point of
+          building this here is that "unused, and internet-facing, and reaches PII" becomes one
+          more <code class="mono">WHERE</code> clause on the existing graph, not a new pipeline.
+        </p>
+      </div>
+    </div>
+
     <div class="layout">
       <div class="main-col">
     <div class="card diagram-card">
@@ -1043,8 +1107,116 @@ RETURN r, role, g.action, d</textarea>
         <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-role)"></span><span class="name">IAMRole</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store); border:1.5px solid var(--danger)"></span><span class="name">DataStore · pii</span></div><div class="legend-row"><span class="swatch" style="background:transparent; border:2px solid var(--node-rds)"></span><span class="name">observed access (ACCESSED)</span></div></div>
         <p class="empty-hint" style="margin-top:10px;">Same <code class="mono">Resource</code>/<code class="mono">IAMRole</code>/<code class="mono">DataStore</code> labels as the other two tabs — a third feed (access telemetry) joined onto the same inventory by an edge, not a fourth copy of the graph.</p>
       </div>
+
+      <div class="card panel">
+        <h2>Performance</h2>
+        <p class="empty-hint">
+          No formal benchmarking yet — numeric latency/throughput targets are explicitly deferred
+          to the hardening phase (spec §11, Phase 3), so treat the below as what's actually been
+          checked, not a performance guarantee.
+        </p>
+        <p class="empty-hint" style="margin-top:10px;">
+          <b style="color:var(--ink);">Correctness under real cross-partition traversal:</b>
+          this query's <code class="mono">NOT EXISTS</code> anti-join is verified end-to-end
+          against two real partitions (<code class="mono">lp_end_to_end.rs</code>), with fixture
+          node ids deliberately hashed to land on both — so
+          <code class="mono">CheckAntiJoin</code> genuinely crosses the network, it isn't
+          answered from local memory.
+        </p>
+        <p class="empty-hint" style="margin-top:10px;">
+          <b style="color:var(--ink);">What this tab costs on the wire:</b> two round trips —
+          your query, and the same pattern without <code class="mono">WHERE</code>, so the UI can
+          tell &ldquo;declared and used&rdquo; from &ldquo;never declared at all&rdquo; on an
+          empty result. Nothing is computed in this browser.
+        </p>
+        <p class="empty-hint" style="margin-top:10px;">
+          <b style="color:var(--ink);">Known gap:</b> the anti-join has no index to lean on —
+          <code class="mono">@indexed</code> on <code class="mono">CAN_READ.action</code> /
+          <code class="mono">ACCESSED.action</code> is currently a no-op, because the B-Tree
+          property index (Architecture tab) only covers node properties. It filters edge
+          properties directly instead. Invisible at this fixture's size; the first thing to fix
+          before running this against a real fleet.
+        </p>
+      </div>
     </div>
 
+    </div>
+  </section>
+
+  <section class="usecase" data-usecase="architecture" id="panel-architecture" role="tabpanel" aria-labelledby="tab-architecture" hidden>
+    <p class="usecase-lede">
+      Four choices that shape everything else on this page: what a query looks like, where the
+      data actually lives, what makes a lookup fast, and how the whole thing scales past one
+      machine. None of these are covered elsewhere in the UI — this tab is documentation, not a
+      live query surface.
+    </p>
+
+    <div class="arch-grid">
+      <div class="card arch-card">
+        <h2>API <span class="arch-choice">Cypher-inspired DSL</span></h2>
+        <p>
+          <code class="mono">MATCH</code> / <code class="mono">WHERE</code> /
+          <code class="mono">RETURN</code> mirrors openCypher on purpose — capitalizing on
+          existing knowledge rather than inventing a new syntax nobody has seen before. Anyone
+          who has written a Neo4j query already knows how to read one here.
+        </p>
+        <p>
+          It is a deliberately small subset, extended in-house only when a concrete use case
+          needed it: edge aliases (<code class="mono">[g:CAN_READ]</code>),
+          <code class="mono">RETURN alias.property</code>, cross-alias property comparison
+          (<code class="mono">a.action = g.action</code>), and a correlated
+          <code class="mono">NOT EXISTS</code> — the last three added for the Unused permissions
+          tab specifically, not speculatively.
+        </p>
+      </div>
+
+      <div class="card arch-card">
+        <h2>Storage <span class="arch-choice">Apache Iceberg</span></h2>
+        <p>
+          Every node/edge label is its own Iceberg table (<code class="mono">node_&lt;Label&gt;</code>,
+          <code class="mono">edge_&lt;TYPE&gt;</code>) in a shared catalog + warehouse. Iceberg
+          gives snapshot isolation and schema evolution without the engine having to implement
+          either.
+        </p>
+        <p>
+          The read/write split is strict: a separate batch pipeline (<code class="mono">ingest-*</code>)
+          writes snapshots; the query engine only ever reads a pinned snapshot and rebuilds its
+          in-memory index from it on a timer. There is no write path inside the serving engine.
+        </p>
+      </div>
+
+      <div class="card arch-card">
+        <h2>Index <span class="arch-choice">B-Tree + CSR, no aggregation index</span></h2>
+        <ul>
+          <li><b>B-Tree (property index):</b> equality/range lookups on <code class="mono">@indexed</code> properties, per partition. Resolves a query's anchor — e.g. finding the <code class="mono">Resource</code> node with <code class="mono">name = "i-checkout-api-1"</code>.</li>
+          <li><b>CSR / topological index (graph index):</b> a compressed adjacency list per partition, used for navigation. A k-hop traversal walks it directly.</li>
+          <li><b>Pattern matching reuses the same CSR index:</b> a <code class="mono">MATCH</code> pattern compiles to a chain of hops over the topological index — there is no separate "pattern index"; a pattern is just hops with extra <code class="mono">WHERE</code> filters attached.</li>
+        </ul>
+        <p class="caveat">No dedicated aggregation index yet — there is no <code class="mono">COUNT</code>/<code class="mono">SUM</code> in the DSL at all (explicit non-goal for now). Adding one is future work if a real use case demands it.</p>
+      </div>
+
+      <div class="card arch-card">
+        <h2>Engine <span class="arch-choice">Distributed, for horizontal scale</span></h2>
+        <p>
+          Two binaries: <code class="mono">graph-coordinator</code> (stateless — plans a query,
+          then scatter-gathers it) and <code class="mono">graph-partition-node</code> (owns one
+          hash-partition's index generation, rebuilt periodically from Iceberg with an atomic
+          swap so readers never see a half-built index).
+        </p>
+        <p>
+          A query's start is broadcast to <em>every</em> partition (the property index is local,
+          not global), then each hop groups the current frontier by owning partition and fans
+          out one RPC round per hop.
+        </p>
+        <p class="caveat">
+          Cross-partition graph traversal is the hard part: an edge whose destination lives on
+          another partition is carried forward as a remote reference and re-routed into the next
+          network round instead of resolved locally — more hops means more round trips, and a
+          <code class="mono">NOT EXISTS</code> anti-join needs its own RPC per (partition, group)
+          rather than reusing a plain hop. Verified against a real two-partition cluster, not
+          simulated in a single process.
+        </p>
+      </div>
     </div>
   </section>
 
