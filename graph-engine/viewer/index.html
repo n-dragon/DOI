@@ -901,51 +901,66 @@ RETURN r, role, g.action, d</textarea>
 
   var DIAGRAM_NODE_CAP = 20;
 
+  function buildAdjacency(links) {
+    var adjacency = {};
+    links.forEach(function (l) {
+      (adjacency[l.source] = adjacency[l.source] || []).push(l.target);
+      (adjacency[l.target] = adjacency[l.target] || []).push(l.source);
+    });
+    return adjacency;
+  }
+
   // The live coordinator's graph is ~988 nodes — rendering all of them
   // at once was a dense, mostly-illegible hairball (see git history's
   // screenshots). This picks at most `cap` nodes to actually hand the
-  // force-graph widget, prioritized so the interesting ones are never the
-  // ones left out:
-  //   1. query matches first (the whole point of query-result mode is to
-  //      see *which* nodes matched — dropping them from a capped view
-  //      would defeat it)
-  //   2. their direct neighbors (the role/store a matched resource runs
-  //      as / reads — context for *why* it matched)
-  //   3. a round-robin fill across labels, so full-graph mode (no
-  //      matches to prioritize) still shows a mix of Resource/IAMRole/
-  //      DataStore rather than whichever label happened to load first
+  // force-graph widget:
+  //   1. seed with query matches if there are any (the whole point of
+  //      query-result mode is to see *which* nodes matched — dropping
+  //      them from a capped view would defeat it), else a few IAMRoles
+  //      (the hub label — RUNS_AS and CAN_READ both terminate there, so
+  //      starting from roles reaches both other labels fastest)
+  //   2. **breadth-first outward from those seeds along real edges** —
+  //      every node past the seeds is only added because something
+  //      already chosen actually links to it. An earlier version filled
+  //      remaining budget with an independent round-robin over labels
+  //      instead, which could (and did — see the "why no edges" report
+  //      this replaced) pick a Resource, an IAMRole and a DataStore that
+  //      share no edge with each other at all: a legible node count with
+  //      an illegible, edge-free diagram.
+  //   3. only if the BFS still can't fill the budget (a seed in an
+  //      isolated pocket) top up with whatever's left, unconnected — a
+  //      last resort, not the common path
   function sampleForDisplay(structureGraph, statusByKey, cap) {
     var chosen = [];
     var chosenSet = {};
+    var queue = [];
     function take(key) {
       if (!key || chosenSet[key] || chosen.length >= cap) return;
       chosenSet[key] = true;
       chosen.push(key);
+      queue.push(key);
     }
 
-    structureGraph.nodes.forEach(function (n) {
-      if (statusByKey[n.id] && statusByKey[n.id].status === 'included') take(n.id);
+    var matched = structureGraph.nodes.filter(function (n) {
+      return statusByKey[n.id] && statusByKey[n.id].status === 'included';
     });
-    if (chosen.length < cap) {
-      structureGraph.links.forEach(function (l) {
-        if (chosenSet[l.source]) take(l.target);
-        if (chosenSet[l.target]) take(l.source);
-      });
+    if (matched.length) {
+      matched.forEach(function (n) { take(n.id); });
+    } else {
+      structureGraph.nodes
+        .filter(function (n) { return n.label === 'IAMRole'; })
+        .slice(0, 3)
+        .forEach(function (n) { take(n.id); });
     }
+
+    var adjacency = buildAdjacency(structureGraph.links);
+    while (chosen.length < cap && queue.length) {
+      var neighbors = adjacency[queue.shift()] || [];
+      for (var i = 0; i < neighbors.length && chosen.length < cap; i++) take(neighbors[i]);
+    }
+
     if (chosen.length < cap) {
-      var byLabel = {};
-      var labels = [];
-      structureGraph.nodes.forEach(function (n) {
-        if (!byLabel[n.label]) { byLabel[n.label] = []; labels.push(n.label); }
-        byLabel[n.label].push(n.id);
-      });
-      for (var round = 0, progressed = true; chosen.length < cap && progressed; round++) {
-        progressed = false;
-        for (var i = 0; i < labels.length && chosen.length < cap; i++) {
-          var list = byLabel[labels[i]];
-          if (round < list.length) { take(list[round]); progressed = true; }
-        }
-      }
+      structureGraph.nodes.forEach(function (n) { take(n.id); });
     }
 
     var nodes = chosen.map(function (key) {
@@ -974,8 +989,12 @@ RETURN r, role, g.action, d</textarea>
     function renderDiagram(statuses) {
       if (!structureGraph) return; // still loading — loadStructure() re-renders once it lands
       var queryMode = section.classList.contains('mode-query');
+      // Full-graph mode ignores any past query's statuses for sampling —
+      // switching back to it should show a fresh representative
+      // neighborhood, not keep re-showing the last query's matches with
+      // their highlight silently turned off.
       var statusByKey = {};
-      (statuses || []).forEach(function (s) { statusByKey[s.key] = s; });
+      if (queryMode) (statuses || []).forEach(function (s) { statusByKey[s.key] = s; });
       var sample = sampleForDisplay(structureGraph, statusByKey, DIAGRAM_NODE_CAP);
       var nodes = sample.nodes.map(function (n) {
         var s = statusByKey[n.id];
@@ -985,7 +1004,7 @@ RETURN r, role, g.action, d</textarea>
         nodes: nodes, links: sample.links,
         mode: queryMode ? 'query' : 'full', height: 520
       });
-      var matched = (statuses || []).filter(function (s) { return s.status === 'included'; }).length;
+      var matched = queryMode ? (statuses || []).filter(function (s) { return s.status === 'included'; }).length : 0;
       els.diagramStatus.textContent = 'Showing ' + nodes.length + ' of ' + structureGraph.nodes.length +
         ' nodes' + (matched ? ' (all ' + Math.min(matched, DIAGRAM_NODE_CAP) + ' matches shown first' +
           (matched > DIAGRAM_NODE_CAP ? ', ' + (matched - DIAGRAM_NODE_CAP) + ' more in the results list' : '') + ')' : '') +
