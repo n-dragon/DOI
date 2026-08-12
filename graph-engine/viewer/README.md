@@ -6,9 +6,10 @@ the browser. Three tabs:
 - **Unused permissions** — the least-privilege-via-telemetry use case:
   cross-references declared IAM access (`RUNS_AS`/`CAN_READ`) against
   observed access telemetry (`ACCESSED`) via a correlated `NOT EXISTS`
-  anti-join, live against a running coordinator. The diagram renders the
-  live coordinator's full ~988-node fleet, fetched on page load — not a
-  handful of hand-positioned boxes.
+  anti-join, live against a running coordinator. The diagram fetches the
+  live coordinator's full ~988-node fleet on page load (not a handful of
+  hand-positioned boxes) but only ever *draws* 20 at a time — query
+  matches prioritized — so it stays legible instead of a hairball.
 - **Architecture** — static reference content (API/storage/index/engine
   choices), no live query surface.
 - **Datadog fleet** — the 1000-node synthetic dataset from
@@ -102,14 +103,20 @@ themselves are React; the rest of the page (tabs, query editor, results
 panel) stays vanilla JS/DOM.
 
 **Unused permissions** (2D, `force-graph-widget-src/entry.js` →
-`vendor/force-graph-widget.js`) — small physics-positioned circles,
-colored by node label in full-graph mode or by query match in query-result
-mode (`nodeColor`/`nodeVal`, no custom canvas drawing — that doesn't scale
-to ~1000 nodes), reading colors from the page's CSS custom properties so
-light/dark theming stays centralized in `index.html`. Exposes
-`window.DOIForceGraph.render(container, {nodes, links, mode})`; `index.html`
-fetches the actual `{nodes, links}` from the live coordinator
-(`buildStructureGraph()`) rather than shipping a static layout. Loaded
+`vendor/force-graph-widget.js`) — small physics-positioned circles, a
+custom `nodeCanvasObject` (feasible again now that `index.html` caps what
+it hands the widget to 20 nodes — see `sampleForDisplay()` — unlike an
+earlier version of this file that rendered the full ~1000-node fetch and
+had to fall back to plain `nodeColor`/`nodeVal`, no per-node text). Color
+is always the node's label (Resource/IAMRole/DataStore) — status
+(included/excluded) in query-result mode only changes the ring and size,
+never the fill, so type stays identifiable in both modes. Reads colors
+from the page's CSS custom properties so light/dark theming stays
+centralized in `index.html`. Exposes `window.DOIForceGraph.render(container,
+{nodes, links, mode})`; `index.html` fetches the actual full-fleet
+`{nodes, links}` from the live coordinator (`buildStructureGraph()`)
+rather than shipping a static layout, then samples 20 of them per render
+(query matches prioritized) before handing them to this widget. Loaded
 eagerly (it's the default tab).
 
 **Datadog fleet** (3D, `force-graph-widget-src/entry-3d.js` →
