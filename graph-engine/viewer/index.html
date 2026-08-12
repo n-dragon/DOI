@@ -1,6 +1,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>One Cloud Inventory, Two Questions</title>
+<title>Unused Permissions</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg stroke='%23632ca6' stroke-width='2.5' fill='none'%3E%3Cpath d='M8 8L24 16M8 8L8 24M8 24L24 16'/%3E%3C/g%3E%3Cg fill='%23632ca6'%3E%3Ccircle cx='8' cy='8' r='5'/%3E%3Ccircle cx='8' cy='24' r='5'/%3E%3Ccircle cx='24' cy='16' r='5'/%3E%3C/g%3E%3C/svg%3E">
 <style>
   :root {
@@ -537,28 +537,19 @@
 
 <div class="wrap">
   <header class="page">
-    <div class="eyebrow">graph-engine · one knowledge graph, two lenses</div>
-    <h1>One cloud inventory, two questions</h1>
+    <div class="eyebrow">graph-engine · least privilege, proven by telemetry</div>
+    <h1>Which grants were never used?</h1>
     <p class="lede">
-      The same <code class="mono">Resource</code> nodes, joined to a billing feed and to an
-      identity/posture feed — both joins are real edges in the graph, not runtime SQL joins.
-      This page is served by <code class="mono">graph-viewer-server</code> and calls it over
-      HTTP to run your query against a live <code class="mono">graph-coordinator</code>, the
-      same one <code class="mono">query-client</code> talks to. No query logic runs in this
-      browser.
+      Declared IAM access joined against observed access telemetry — the join is a real edge in
+      the graph, not a runtime SQL join. This page is served by
+      <code class="mono">graph-viewer-server</code> and calls it over HTTP to run your query
+      against a live <code class="mono">graph-coordinator</code>, the same one
+      <code class="mono">query-client</code> talks to. No query logic runs in this browser.
     </p>
   </header>
 
   <div class="tabs" role="tablist" aria-label="Use case">
-    <button type="button" role="tab" data-tab="cost" aria-selected="true" aria-controls="panel-cost" id="tab-cost">
-      Cloud cost
-      <span class="tab-sub">what does this resource cost?</span>
-    </button>
-    <button type="button" role="tab" data-tab="security" aria-selected="false" aria-controls="panel-security" id="tab-security" tabindex="-1">
-      Attack paths
-      <span class="tab-sub">can the internet reach our PII?</span>
-    </button>
-    <button type="button" role="tab" data-tab="unused" aria-selected="false" aria-controls="panel-unused" id="tab-unused" tabindex="-1">
+    <button type="button" role="tab" data-tab="unused" aria-selected="true" aria-controls="panel-unused" id="tab-unused">
       Unused permissions
       <span class="tab-sub">which grants were never used?</span>
     </button>
@@ -568,394 +559,13 @@
     </button>
   </div>
 
-  <section class="usecase" data-usecase="cost" id="panel-cost" role="tabpanel" aria-labelledby="tab-cost">
-    <p class="usecase-lede">
-      A resource hierarchy joined to a separate billing dataset. Traversal answers which
-      resources sit under an account and what each one costs — the join is an edge.
-    </p>
-    <div class="layout">
-      <div class="main-col">
-    <div class="card diagram-card">
-      <div class="diagram-toolbar">
-        <span class="diagram-title">prod-aws · us-east-1</span>
-        <div class="toggle" role="group" aria-label="Diagram mode">
-          <button type="button" data-role="btn-full" aria-pressed="true">full graph</button>
-          <button type="button" data-role="btn-query" aria-pressed="false">query result</button>
-        </div>
-      </div>
-
-      <svg class="graph" viewBox="0 0 1180 700" role="img" aria-label="Graph of a cloud account's resource hierarchy joined to its cost records, with the current query's traversal and results highlighted in query mode.">
-        <defs>
-          <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L8,4 L0,8 z" fill="var(--ink-faint)"></path>
-          </marker>
-        </defs>
-
-        <!-- structural edges (OWNS / CONTAINS) — data-id names which
-             resource this edge leads to, so the query panel can light
-             up exactly the edges on the path to a reached resource. -->
-        <g>
-          <line class="edge" data-hop="0" marker-end="url(#arrow)" x1="330" y1="72" x2="330" y2="128"></line>
-          <line class="edge" data-hop="1" data-id="subnet" marker-end="url(#arrow)" x1="315" y1="172" x2="205" y2="228"></line>
-          <line class="edge" data-hop="1" data-id="rds" marker-end="url(#arrow)" x1="350" y1="172" x2="500" y2="228"></line>
-          <line class="edge" data-hop="2" data-id="i1" marker-end="url(#arrow)" x1="165" y1="270" x2="105" y2="328"></line>
-          <line class="edge" data-hop="2" data-id="i2" marker-end="url(#arrow)" x1="210" y1="270" x2="270" y2="328"></line>
-          <line class="edge" data-hop="3" data-id="vol" marker-end="url(#arrow)" x1="80" y1="370" x2="80" y2="428"></line>
-          <line class="edge" data-hop="4" data-id="snap" marker-end="url(#arrow)" x1="80" y1="470" x2="80" y2="528"></line>
-        </g>
-
-        <!-- cost edges (HAS_COST) -->
-        <g>
-          <line class="edge edge--cost" data-id="subnet" data-result="excluded" x1="255" y1="252" x2="940" y2="168"></line>
-          <line class="edge edge--cost" data-id="i1" data-result="included" x1="165" y1="360" x2="940" y2="248"></line>
-          <line class="edge edge--cost" data-id="i2" data-result="excluded" x1="365" y1="360" x2="940" y2="328"></line>
-          <line class="edge edge--cost" data-id="vol" data-result="excluded" x1="170" y1="460" x2="940" y2="408"></line>
-          <line class="edge edge--cost" data-id="snap" data-result="excluded" x1="170" y1="560" x2="940" y2="488"></line>
-          <line class="edge edge--cost" data-id="rds" data-result="included" x1="595" y1="252" x2="940" y2="568"></line>
-        </g>
-
-        <!-- resource hierarchy nodes -->
-        <g class="node" data-id="account" data-node-key="CloudAccount:123456789012" data-status="n-a">
-          <rect x="255" y="28" width="150" height="44" rx="8" fill="var(--node-account)" stroke="var(--node-account)"></rect>
-          <text class="label" x="330" y="46" text-anchor="middle">prod-aws</text>
-          <text class="sub mono" x="330" y="61" text-anchor="middle">CloudAccount</text>
-          <title>CloudAccount · account_id 123456789012 · provider aws</title>
-        </g>
-
-        <g class="node" data-id="vpc" data-node-key="Resource:vpc-prod" data-status="n-a">
-          <rect x="255" y="128" width="150" height="44" rx="8" fill="var(--node-vpc)" stroke="var(--node-vpc)"></rect>
-          <text class="label" x="330" y="146" text-anchor="middle">vpc-prod</text>
-          <text class="sub mono" x="330" y="161" text-anchor="middle">Resource · vpc</text>
-          <title>Resource · vpc-prod · type vpc · us-east-1</title>
-        </g>
-
-        <g class="node" data-id="subnet" data-node-key="Resource:subnet-prod-a" data-status="excluded">
-          <rect x="130" y="228" width="150" height="40" rx="8" fill="var(--node-subnet)" stroke="var(--node-subnet)"></rect>
-          <text class="label" x="205" y="245" text-anchor="middle">subnet-prod-a</text>
-          <text class="sub mono" x="205" y="259" text-anchor="middle">Resource · subnet</text>
-          <text class="why" x="205" y="282" text-anchor="middle"></text>
-          <text class="badge mono" x="205" y="282" text-anchor="middle" fill="var(--accent-cost)"></text>
-          <title>Resource · subnet-prod-a · type subnet · us-east-1 · 1 hop from vpc-prod</title>
-        </g>
-
-        <g class="node" data-id="rds" data-node-key="Resource:rds-orders-db" data-status="included">
-          <rect x="425" y="228" width="150" height="40" rx="8" fill="var(--node-rds)" stroke="var(--node-rds)"></rect>
-          <text class="label" x="500" y="245" text-anchor="middle">rds-orders-db</text>
-          <text class="sub mono" x="500" y="259" text-anchor="middle">Resource · rds_instance</text>
-          <text class="why" x="500" y="282" text-anchor="middle"></text>
-          <text class="badge mono" x="500" y="282" text-anchor="middle" fill="var(--accent-cost)"></text>
-          <title>Resource · rds-orders-db · type rds_instance · us-east-1 · 1 hop from vpc-prod</title>
-        </g>
-
-        <g class="node" data-id="i1" data-node-key="Resource:i-checkout-api-1" data-status="included">
-          <rect x="0" y="328" width="170" height="40" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
-          <text class="label" x="85" y="345" text-anchor="middle">i-checkout-api-1</text>
-          <text class="sub mono" x="85" y="359" text-anchor="middle">Resource · ec2_instance</text>
-          <text class="why" x="85" y="382" text-anchor="middle"></text>
-          <text class="badge mono" x="85" y="382" text-anchor="middle" fill="var(--accent-cost)"></text>
-          <title>Resource · i-checkout-api-1 · type ec2_instance · us-east-1 · 2 hops from vpc-prod</title>
-        </g>
-
-        <g class="node" data-id="i2" data-node-key="Resource:i-checkout-api-2" data-status="excluded">
-          <rect x="195" y="328" width="170" height="40" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
-          <text class="label" x="280" y="345" text-anchor="middle">i-checkout-api-2</text>
-          <text class="sub mono" x="280" y="359" text-anchor="middle">Resource · ec2_instance</text>
-          <text class="why" x="280" y="382" text-anchor="middle"></text>
-          <text class="badge mono" x="280" y="382" text-anchor="middle" fill="var(--accent-cost)"></text>
-          <title>Resource · i-checkout-api-2 · type ec2_instance · us-east-1 · 2 hops from vpc-prod</title>
-        </g>
-
-        <g class="node" data-id="vol" data-node-key="Resource:vol-checkout-api-1" data-status="excluded">
-          <rect x="-10" y="428" width="180" height="40" rx="8" fill="var(--node-storage)" stroke="var(--node-storage)"></rect>
-          <text class="label" x="80" y="445" text-anchor="middle">vol-checkout-api-1</text>
-          <text class="sub mono" x="80" y="459" text-anchor="middle">Resource · ebs_volume</text>
-          <text class="why" x="80" y="482" text-anchor="middle"></text>
-          <text class="badge mono" x="80" y="482" text-anchor="middle" fill="var(--accent-cost)"></text>
-          <title>Resource · vol-checkout-api-1 · type ebs_volume · us-east-1 · 3 hops from vpc-prod</title>
-        </g>
-
-        <g class="node" data-id="snap" data-node-key="Resource:snap-checkout-api-1" data-status="excluded">
-          <rect x="-10" y="528" width="180" height="40" rx="8" fill="var(--node-storage)" stroke="var(--node-storage)"></rect>
-          <text class="label" x="80" y="545" text-anchor="middle">snap-checkout-api-1</text>
-          <text class="sub mono" x="80" y="559" text-anchor="middle">Resource · ebs_snapshot</text>
-          <text class="why" x="80" y="582" text-anchor="middle"></text>
-          <text class="badge mono" x="80" y="582" text-anchor="middle" fill="var(--accent-cost)"></text>
-          <title>Resource · snap-checkout-api-1 · type ebs_snapshot · us-east-1 · 4 hops from vpc-prod</title>
-        </g>
-
-        <!-- cost ledger -->
-        <g class="node node--cost" data-id="cost-subnet" data-status="n-a">
-          <rect x="880" y="148" width="120" height="36" rx="7"></rect>
-          <text class="label" x="940" y="170" text-anchor="middle">$5&nbsp;/mo</text>
-          <title>CostRecord · $5/mo · period 2024-06 · for subnet-prod-a</title>
-        </g>
-        <g class="node node--cost" data-id="cost-i1" data-status="n-a">
-          <rect x="880" y="228" width="120" height="36" rx="7"></rect>
-          <text class="label" x="940" y="250" text-anchor="middle">$245&nbsp;/mo</text>
-          <title>CostRecord · $245/mo · period 2024-06 · for i-checkout-api-1</title>
-        </g>
-        <g class="node node--cost" data-id="cost-i2" data-status="n-a">
-          <rect x="880" y="308" width="120" height="36" rx="7"></rect>
-          <text class="label" x="940" y="330" text-anchor="middle">$40&nbsp;/mo</text>
-          <title>CostRecord · $40/mo · period 2024-06 · for i-checkout-api-2</title>
-        </g>
-        <g class="node node--cost" data-id="cost-vol" data-status="n-a">
-          <rect x="880" y="388" width="120" height="36" rx="7"></rect>
-          <text class="label" x="940" y="410" text-anchor="middle">$12&nbsp;/mo</text>
-          <title>CostRecord · $12/mo · period 2024-06 · for vol-checkout-api-1</title>
-        </g>
-        <g class="node node--cost" data-id="cost-snap" data-status="n-a">
-          <rect x="880" y="468" width="120" height="36" rx="7"></rect>
-          <text class="label" x="940" y="490" text-anchor="middle">$500&nbsp;/mo</text>
-          <title>CostRecord · $500/mo · period 2024-06 · for snap-checkout-api-1</title>
-        </g>
-        <g class="node node--cost" data-id="cost-rds" data-status="n-a">
-          <rect x="880" y="548" width="120" height="36" rx="7"></rect>
-          <text class="label" x="940" y="570" text-anchor="middle">$340&nbsp;/mo</text>
-          <title>CostRecord · $340/mo · period 2024-06 · for rds-orders-db</title>
-        </g>
-
-        <text x="940" y="120" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">cost ledger</text>
-      </svg>
-      <figcaption style="padding: 4px 4px 16px; font-size: 12px; color: var(--ink-faint);">
-        Solid arrows: <code class="mono">OWNS</code> / <code class="mono">CONTAINS</code> (the resource hierarchy). Dashed lines: <code class="mono">HAS_COST</code>, joining each resource to its billing record. Hover any node for its properties.
-      </figcaption>
-    </div>
-    <div class="card panel">
-      <h2>Where this stops</h2>
-      <p class="empty-hint">The engine has no <code class="mono">SUM</code>, no <code class="mono">GROUP BY</code> — aggregation is an explicit non-goal (spec §1.4). So it answers <em>which</em> resources cost more than $100, never <em>how much</em> the team spends in total. That number belongs downstream, on the streamed rows. The other tab is the shape this engine is actually built for.</p>
-    </div>
-    </div>
-    <div class="side">
-      <div class="card panel">
-        <div class="panel-head">
-          <h2>Query</h2>
-          <span class="panel-head-hint">edit &amp; run</span>
-        </div>
-        <textarea data-role="query-input" class="query-editor mono" spellcheck="false" autocomplete="off" rows="8">MATCH (a:CloudAccount {account_id: "123456789012"})
-  -[:OWNS]-&gt; (vpc:Resource)
-  -[:CONTAINS*1..3]-&gt; (r:Resource)
-  -[:HAS_COST]-&gt; (c:CostRecord)
-WHERE c.amount_usd &gt; 100
-RETURN r, c</textarea>
-        <div class="query-actions">
-          <button type="button" data-role="btn-run" class="btn btn-primary">Run query</button>
-          <button type="button" data-role="btn-reset" class="btn btn-ghost">Reset</button>
-        </div>
-        <p class="query-error" data-role="query-error" role="alert" hidden></p>
-        <p class="empty-hint" data-role="query-status" style="margin-top:10px;">Sent as-is to <code class="mono">POST /api/query</code>, parsed and executed by the real <code class="mono">graph-coordinator</code>. Include both <code class="mono">r</code> and <code class="mono">c</code> in <code class="mono">RETURN</code> to see resource name and cost together.</p>
-      </div>
-
-      <div class="card panel">
-        <h2 data-role="results-title">Dataset</h2>
-        <div data-role="results-body"></div>
-      </div>
-
-      <div class="card panel">
-        <h2>Node types</h2>
-        <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-account)"></span><span class="name">CloudAccount</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-vpc)"></span><span class="name">Resource · vpc / subnet</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-storage)"></span><span class="name">Resource · ebs_volume / snapshot</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-rds)"></span><span class="name">Resource · rds_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-cost); border:1.5px solid var(--accent-cost)"></span><span class="name">CostRecord</span></div></div>
-        <p class="empty-hint" style="margin-top:10px;">Color shows the <code class="mono">resource_type</code> property — the schema has one <code class="mono">Resource</code> label, not one per cloud service.</p>
-      </div>
-    </div>
-
-    </div>
-  </section>
-
-  <section class="usecase" data-usecase="security" id="panel-security" role="tabpanel" aria-labelledby="tab-security" hidden>
-    <p class="usecase-lede">
-      A CSPM raises thousands of findings; almost none are exploitable on their own. The question
-      worth answering is whether a chain exists from something internet-facing to something
-      classified — a vulnerable box that runs as a modest role, which can assume a role, which
-      can read the customer-data store. <strong>That chain is a path in a graph</strong>, and
-      nothing but a traversal computes it. Bounded role-assumption hops
-      (<code class="mono">*1..3</code>) are exactly this engine's priority primitive, and the
-      answer is the path itself — so the missing aggregation never bites.
-    </p>
-    <div class="layout">
-      <div class="main-col">
-    <div class="card diagram-card">
-      <div class="diagram-toolbar">
-        <span class="diagram-title">prod-aws · identity &amp; data-access posture</span>
-        <div class="toggle" role="group" aria-label="Diagram mode">
-          <button type="button" data-role="btn-full" aria-pressed="true">full graph</button>
-          <button type="button" data-role="btn-query" aria-pressed="false">query result</button>
-        </div>
-      </div>
-
-      <svg class="graph" viewBox="0 0 1180 455" role="img" aria-label="Graph of cloud resources, the IAM roles they run as, the roles those can assume, and the data stores each role can read — with the current query's attack path highlighted in query mode.">
-        <defs>
-          <marker id="arrow-sec" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L8,4 L0,8 z" fill="var(--ink-faint)"></path>
-          </marker>
-        </defs>
-
-        <text x="105" y="45" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">resources</text>
-        <text x="365" y="45" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">roles they run as</text>
-        <text x="690" y="45" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">assumable roles</text>
-        <text x="1080" y="45" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">data stores</text>
-
-        <!-- RUNS_AS / CAN_ASSUME. data-from/data-to name the two endpoints:
-             an edge lights up only when *both* ends are on the traversal,
-             so the same role reached from an excluded resource stays dark. -->
-        <g>
-          <line class="edge" data-from="r1" data-to="role1" marker-end="url(#arrow-sec)" x1="200" y1="118" x2="273" y2="118"></line>
-          <line class="edge" data-from="r2" data-to="role1" marker-end="url(#arrow-sec)" x1="200" y1="250" x2="273" y2="132"></line>
-          <line class="edge" data-from="r3" data-to="role4" marker-end="url(#arrow-sec)" x1="200" y1="380" x2="273" y2="380"></line>
-          <line class="edge" data-from="role1" data-to="role2" marker-end="url(#arrow-sec)" x1="455" y1="118" x2="518" y2="118"></line>
-          <line class="edge" data-from="role2" data-to="role3" marker-end="url(#arrow-sec)" x1="690" y1="118" x2="748" y2="118"></line>
-        </g>
-
-        <!-- CAN_READ, dashed like HAS_COST: the join to what actually matters -->
-        <g>
-          <line class="edge edge--cost" data-from="role3" data-to="ds1" marker-end="url(#arrow-sec)" x1="930" y1="118" x2="988" y2="118"></line>
-          <line class="edge edge--cost" data-from="role4" data-to="ds2" marker-end="url(#arrow-sec)" x1="455" y1="380" x2="988" y2="380"></line>
-          <line class="edge edge--cost" data-from="role1" data-to="ds2" marker-end="url(#arrow-sec)" x1="455" y1="132" x2="988" y2="368"></line>
-        </g>
-
-        <!-- resources -->
-        <g class="node" data-id="r1" data-node-key="Resource:i-checkout-api-1" data-status="included">
-          <rect x="10" y="90" width="190" height="56" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
-          <text class="label" x="105" y="111" text-anchor="middle">i-checkout-api-1</text>
-          <text class="sub mono" x="105" y="125" text-anchor="middle">Resource · ec2_instance</text>
-          <text class="sub mono" x="105" y="139" text-anchor="middle">internet-facing · CVSS 9.4</text>
-          <text class="why" x="105" y="162" text-anchor="middle"></text>
-          <text class="badge mono" x="105" y="162" text-anchor="middle" fill="var(--danger)"></text>
-          <title>Resource · i-checkout-api-1 · internet_facing true · max_severity 94</title>
-        </g>
-
-        <g class="node" data-id="r2" data-node-key="Resource:i-checkout-api-2" data-status="excluded">
-          <rect x="10" y="222" width="190" height="56" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
-          <text class="label" x="105" y="243" text-anchor="middle">i-checkout-api-2</text>
-          <text class="sub mono" x="105" y="257" text-anchor="middle">Resource · ec2_instance</text>
-          <text class="sub mono" x="105" y="271" text-anchor="middle">internal only · CVSS 9.4</text>
-          <text class="why" x="105" y="294" text-anchor="middle"></text>
-          <text class="badge mono" x="105" y="294" text-anchor="middle" fill="var(--danger)"></text>
-          <title>Resource · i-checkout-api-2 · same CVE and same role as -1, but internet_facing false</title>
-        </g>
-
-        <g class="node" data-id="r3" data-node-key="Resource:rds-orders-db" data-status="excluded">
-          <rect x="10" y="352" width="190" height="56" rx="8" fill="var(--node-rds)" stroke="var(--node-rds)"></rect>
-          <text class="label" x="105" y="373" text-anchor="middle">rds-orders-db</text>
-          <text class="sub mono" x="105" y="387" text-anchor="middle">Resource · rds_instance</text>
-          <text class="sub mono" x="105" y="401" text-anchor="middle">internet-facing · CVSS 2.1</text>
-          <text class="why" x="105" y="424" text-anchor="middle"></text>
-          <text class="badge mono" x="105" y="424" text-anchor="middle" fill="var(--danger)"></text>
-          <title>Resource · rds-orders-db · exposed, but its role reaches nothing classified</title>
-        </g>
-
-        <!-- IAM roles -->
-        <g class="node" data-id="role1" data-node-key="IAMRole:role-checkout-api" data-status="included">
-          <rect x="275" y="95" width="180" height="46" rx="8" fill="var(--node-role)" stroke="var(--node-role)"></rect>
-          <text class="label" x="365" y="114" text-anchor="middle">role-checkout-api</text>
-          <text class="sub mono" x="365" y="128" text-anchor="middle">IAMRole · not admin</text>
-          <text class="why" x="365" y="157" text-anchor="middle"></text>
-          <text class="badge mono" x="365" y="157" text-anchor="middle" fill="var(--danger)"></text>
-          <title>IAMRole · role-checkout-api · is_admin false — harmless on its own</title>
-        </g>
-
-        <g class="node" data-id="role2" data-node-key="IAMRole:role-deploy" data-status="excluded">
-          <rect x="520" y="95" width="170" height="46" rx="8" fill="var(--node-role)" stroke="var(--node-role)"></rect>
-          <text class="label" x="605" y="114" text-anchor="middle">role-deploy</text>
-          <text class="sub mono" x="605" y="128" text-anchor="middle">IAMRole · not admin</text>
-          <text class="why" x="605" y="157" text-anchor="middle"></text>
-          <text class="badge mono" x="605" y="157" text-anchor="middle" fill="var(--danger)"></text>
-          <title>IAMRole · role-deploy · the middle hop of the CAN_ASSUME chain</title>
-        </g>
-
-        <g class="node" data-id="role3" data-node-key="IAMRole:role-data-admin" data-status="included">
-          <rect x="750" y="95" width="180" height="46" rx="8" fill="var(--node-role)" stroke="var(--node-role)"></rect>
-          <text class="label" x="840" y="114" text-anchor="middle">role-data-admin</text>
-          <text class="sub mono" x="840" y="128" text-anchor="middle">IAMRole · admin</text>
-          <text class="why" x="840" y="157" text-anchor="middle"></text>
-          <text class="badge mono" x="840" y="157" text-anchor="middle" fill="var(--danger)"></text>
-          <title>IAMRole · role-data-admin · is_admin true · can read the PII store</title>
-        </g>
-
-        <g class="node" data-id="role4" data-node-key="IAMRole:role-rds-monitor" data-status="excluded">
-          <rect x="275" y="357" width="180" height="46" rx="8" fill="var(--node-role)" stroke="var(--node-role)"></rect>
-          <text class="label" x="365" y="376" text-anchor="middle">role-rds-monitor</text>
-          <text class="sub mono" x="365" y="390" text-anchor="middle">IAMRole · not admin</text>
-          <text class="why" x="365" y="419" text-anchor="middle"></text>
-          <text class="badge mono" x="365" y="419" text-anchor="middle" fill="var(--danger)"></text>
-          <title>IAMRole · role-rds-monitor · assumes nothing, reads only ops logs</title>
-        </g>
-
-        <!-- data stores -->
-        <g class="node" data-id="ds1" data-node-key="DataStore:s3-customer-exports" data-status="included">
-          <rect x="990" y="93" width="180" height="50" rx="8" fill="var(--node-store)" stroke="var(--danger)" stroke-width="2.5"></rect>
-          <text class="label" x="1080" y="113" text-anchor="middle">s3-customer-exports</text>
-          <text class="sub mono" x="1080" y="129" text-anchor="middle">DataStore · pii</text>
-          <text class="why" x="1080" y="159" text-anchor="middle"></text>
-          <text class="badge mono" x="1080" y="159" text-anchor="middle" fill="var(--danger)"></text>
-          <title>DataStore · s3-customer-exports · classification pii — the crown jewels, and the query's anchor</title>
-        </g>
-
-        <g class="node" data-id="ds2" data-node-key="DataStore:s3-ops-logs" data-status="excluded">
-          <rect x="990" y="355" width="180" height="50" rx="8" fill="var(--node-store)" stroke="var(--node-store)"></rect>
-          <text class="label" x="1080" y="375" text-anchor="middle">s3-ops-logs</text>
-          <text class="sub mono" x="1080" y="391" text-anchor="middle">DataStore · internal</text>
-          <text class="why" x="1080" y="421" text-anchor="middle"></text>
-          <text class="badge mono" x="1080" y="421" text-anchor="middle" fill="var(--danger)"></text>
-          <title>DataStore · s3-ops-logs · classification internal — reachable, but not what the query anchors on</title>
-        </g>
-      </svg>
-      <figcaption style="padding: 4px 4px 16px; font-size: 12px; color: var(--ink-faint);">
-        Solid arrows: <code class="mono">RUNS_AS</code> / <code class="mono">CAN_ASSUME</code> (who can become whom). Dashed lines: <code class="mono">CAN_READ</code>, joining a role to the data it can reach. Hover any node for its properties.
-      </figcaption>
-    </div>
-    <div class="card panel">
-      <h2>The three decoys</h2>
-      <div class="pipeline">
-        <div class="pipeline-step"><span class="cmd mono">i-checkout-api-2</span><span>same CVE, same role — but not internet-facing. Rejected by <code class="mono">WHERE</code>.</span></div>
-        <div class="pipeline-step"><span class="cmd mono">rds-orders-db</span><span>exposed, yet its role assumes nothing and reads only ops logs. The pattern never reaches it.</span></div>
-        <div class="pipeline-step"><span class="cmd mono">role-checkout-api</span><span>holds a <code class="mono">CAN_READ</code> edge of its own — to a store that isn't classified. Having the edge is not the finding; where the chain <em>ends</em> is.</span></div>
-      </div>
-      <p class="empty-hint" style="margin-top:10px;">Each is a finding a rule-per-resource scanner would raise. Only the path tells them apart.</p>
-    </div>
-    </div>
-
-    <div class="side">
-      <div class="card panel">
-        <div class="panel-head">
-          <h2>Query</h2>
-          <span class="panel-head-hint">edit &amp; run</span>
-        </div>
-        <textarea data-role="query-input" class="query-editor mono" spellcheck="false" autocomplete="off" rows="12">MATCH (d:DataStore {classification: "pii"})
-  &lt;-[:CAN_READ]- (admin:IAMRole)
-  &lt;-[:CAN_ASSUME*1..3]- (entry:IAMRole)
-  &lt;-[:RUNS_AS]- (r:Resource)
-WHERE r.internet_facing = true AND r.max_severity &gt;= 90
-RETURN r, entry, admin, d</textarea>
-        <div class="query-actions">
-          <button type="button" data-role="btn-run" class="btn btn-primary">Run query</button>
-          <button type="button" data-role="btn-reset" class="btn btn-ghost">Reset</button>
-        </div>
-        <p class="query-error" data-role="query-error" role="alert" hidden></p>
-        <p class="empty-hint" data-role="query-status" style="margin-top:10px;">Three real round trips: your query, the same pattern without its <code class="mono">WHERE</code> (to tell &ldquo;filtered out&rdquo; from &ldquo;never reached&rdquo;), and the role-reachability chain. All parsed and executed by <code class="mono">graph-coordinator</code>.</p>
-      </div>
-
-      <div class="card panel">
-        <h2 data-role="results-title">Dataset</h2>
-        <div data-role="results-body"></div>
-      </div>
-
-      <div class="card panel">
-        <h2>Node types</h2>
-        <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-rds)"></span><span class="name">Resource · rds_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-role)"></span><span class="name">IAMRole</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store); border:1.5px solid var(--danger)"></span><span class="name">DataStore · pii</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store)"></span><span class="name">DataStore · internal</span></div><div class="legend-row"><span class="swatch" style="background:transparent; border:2px dashed var(--node-traversed)"></span><span class="name">traversed, not projected</span></div></div>
-        <p class="empty-hint" style="margin-top:10px;"><code class="mono">Resource</code> is the same label the cost tab traverses — one inventory, joined to a second scanner feed by an edge rather than by a runtime join.</p>
-      </div>
-    </div>
-
-    </div>
-  </section>
-
-  <section class="usecase" data-usecase="unused" id="panel-unused" role="tabpanel" aria-labelledby="tab-unused" hidden>
+  <section class="usecase" data-usecase="unused" id="panel-unused" role="tabpanel" aria-labelledby="tab-unused">
     <p class="usecase-lede">
       A CSPM tells you a role <em>can</em> read the PII store. It cannot tell you whether it
       <em>ever has</em> — that requires a second, independently-collected fact: access telemetry,
       joined against the declared grant. <code class="mono">i-checkout-api-1</code> and
-      <code class="mono">i-checkout-api-2</code> are the identical twins from the Attack paths tab,
-      same role, same declared reach — but only one of them has ever actually touched the store.
+      <code class="mono">i-checkout-api-2</code> are identical twins — same role, same declared
+      reach — but only one of them has ever actually touched the store.
       Declared access with no matching observed access, inside a trust window, is the finding.
       That cross-reference is exactly what edge aliases and a correlated
       <code class="mono">NOT EXISTS</code> were added to this DSL for.
@@ -1063,7 +673,7 @@ RETURN r, entry, admin, d</textarea>
           <text class="sub mono" x="780" y="199" text-anchor="middle">DataStore · pii</text>
           <text class="why" x="780" y="234" text-anchor="middle"></text>
           <text class="badge mono" x="780" y="234" text-anchor="middle" fill="var(--danger)"></text>
-          <title>DataStore · s3-customer-exports · classification pii — the same crown jewels the Attack paths tab anchors on</title>
+          <title>DataStore · s3-customer-exports · classification pii — the sensitive store this finding protects</title>
         </g>
       </svg>
       <figcaption style="padding: 4px 4px 16px; font-size: 12px; color: var(--ink-faint);">
@@ -1105,7 +715,7 @@ RETURN r, role, g.action, d</textarea>
       <div class="card panel">
         <h2>Node types</h2>
         <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-role)"></span><span class="name">IAMRole</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store); border:1.5px solid var(--danger)"></span><span class="name">DataStore · pii</span></div><div class="legend-row"><span class="swatch" style="background:transparent; border:2px solid var(--node-rds)"></span><span class="name">observed access (ACCESSED)</span></div></div>
-        <p class="empty-hint" style="margin-top:10px;">Same <code class="mono">Resource</code>/<code class="mono">IAMRole</code>/<code class="mono">DataStore</code> labels as the other two tabs — a third feed (access telemetry) joined onto the same inventory by an edge, not a fourth copy of the graph.</p>
+        <p class="empty-hint" style="margin-top:10px;">One shared inventory: <code class="mono">Resource</code>/<code class="mono">IAMRole</code>/<code class="mono">DataStore</code> nodes, with access telemetry joined onto them by an edge, not a separate copy of the graph.</p>
       </div>
 
       <div class="card panel">
@@ -1285,122 +895,7 @@ RETURN r, role, g.action, d</textarea>
     return m ? m[1] + m[2] : null;
   }
 
-  function costAmounts(rows) {
-    var byResource = {};
-    (rows || []).forEach(function (row) {
-      var resource = null, cost = null;
-      for (var alias in row) {
-        if (row[alias] && row[alias].label === 'Resource') resource = row[alias];
-        if (row[alias] && row[alias].label === 'CostRecord') cost = row[alias];
-      }
-      var key = nodeKey(resource);
-      if (key) {
-        byResource[key] = cost && cost.properties ? cost.properties.amount_usd : null;
-      }
-    });
-    return byResource;
-  }
-
   var USE_CASES = {
-    cost: {
-      id: 'cost',
-      // Only the resources carry a query-dependent state; the account and
-      // vpc are context, and CostRecord boxes are lit through their edge.
-      known: [
-        { svgId: 'subnet', key: 'Resource:subnet-prod-a', name: 'subnet-prod-a' },
-        { svgId: 'rds', key: 'Resource:rds-orders-db', name: 'rds-orders-db' },
-        { svgId: 'i1', key: 'Resource:i-checkout-api-1', name: 'i-checkout-api-1' },
-        { svgId: 'i2', key: 'Resource:i-checkout-api-2', name: 'i-checkout-api-2' },
-        { svgId: 'vol', key: 'Resource:vol-checkout-api-1', name: 'vol-checkout-api-1' },
-        { svgId: 'snap', key: 'Resource:snap-checkout-api-1', name: 'snap-checkout-api-1' }
-      ],
-      edgeRule: 'target',
-      pathQuery: null,
-      fullStats: [
-        ['Nodes in this lens', '14'],
-        ['Edges in this lens', '13'],
-        ['Labels', 'CloudAccount, Resource, CostRecord'],
-        ['Whole dataset', '20 nodes · 23 edges']
-      ],
-      badgeFor: function (known, ctx) {
-        var amount = ctx.amounts[known.key];
-        return (amount != null ? '$' + amount + '/mo' : '') + ' · kept';
-      },
-      renderResults: function (statuses, ctx, els) {
-        var included = statuses.filter(function (s) { return s.status === 'included'; });
-        var excluded = statuses.filter(function (s) { return s.status !== 'included'; });
-        els.title.textContent = 'Result — ' + included.length + ' row' + (included.length === 1 ? '' : 's');
-        var html;
-        if (included.length) {
-          html = '<ul class="result-list">' + included.map(function (s) {
-            var amount = ctx.amounts[s.key];
-            return '<li><span>' + s.name + '</span><span class="amt mono">' +
-              (amount != null ? '$' + amount + '/mo' : '—') + '</span></li>';
-          }).join('') + '</ul>';
-        } else {
-          html = '<p class="empty-hint">No resources matched this query.</p>';
-        }
-        html += excludedList(excluded);
-        els.body.innerHTML = html;
-      }
-    },
-
-    security: {
-      id: 'security',
-      known: [
-        { svgId: 'r1', key: 'Resource:i-checkout-api-1', name: 'i-checkout-api-1' },
-        { svgId: 'r2', key: 'Resource:i-checkout-api-2', name: 'i-checkout-api-2' },
-        { svgId: 'r3', key: 'Resource:rds-orders-db', name: 'rds-orders-db' },
-        { svgId: 'role1', key: 'IAMRole:role-checkout-api', name: 'role-checkout-api' },
-        { svgId: 'role2', key: 'IAMRole:role-deploy', name: 'role-deploy' },
-        { svgId: 'role3', key: 'IAMRole:role-data-admin', name: 'role-data-admin' },
-        { svgId: 'role4', key: 'IAMRole:role-rds-monitor', name: 'role-rds-monitor' },
-        { svgId: 'ds1', key: 'DataStore:s3-customer-exports', name: 's3-customer-exports' },
-        { svgId: 'ds2', key: 'DataStore:s3-ops-logs', name: 's3-ops-logs' }
-      ],
-      edgeRule: 'endpoints',
-      // A third real query, independent of the WHERE clause: which roles
-      // can reach a PII store within three assume-hops at all. It exists
-      // because `RETURN` only *projects* — the middle hop of a `*1..3`
-      // range binds no returned alias in the full pattern, so without
-      // this the pivot role would be drawn as "never reached" even
-      // though the traversal walked straight through it.
-      pathQuery: 'MATCH (d:DataStore {classification: "pii"})<-[:CAN_READ]-(admin:IAMRole)<-[:CAN_ASSUME*1..3]-(entry:IAMRole)\nRETURN entry, admin, d',
-      pathAliases: ['r', 'entry', 'admin', 'd'],
-      fullStats: [
-        ['Nodes in this lens', '9'],
-        ['Edges in this lens', '8'],
-        ['Labels', 'Resource, IAMRole, DataStore'],
-        ['Whole dataset', '20 nodes · 23 edges']
-      ],
-      badgeFor: function () { return 'on attack path'; },
-      renderResults: function (statuses, ctx, els) {
-        var rows = ctx.primaryRows;
-        els.title.textContent = 'Result — ' + rows.length + ' attack path' + (rows.length === 1 ? '' : 's');
-        var uc = USE_CASES.security;
-        var html;
-        if (rows.length) {
-          html = '<ul class="result-list">' + rows.map(function (row) {
-            var seen = {}, parts = [];
-            uc.pathAliases.forEach(function (a) {
-              if (row[a]) { parts.push(identityOf(row[a])); seen[a] = true; }
-            });
-            for (var alias in row) {
-              if (!seen[alias]) parts.push(identityOf(row[alias]));
-            }
-            return '<li style="flex-direction:column; align-items:stretch; gap:4px;">' +
-              '<span class="mono" style="font-size:11.5px; color:var(--danger);">exploitable chain</span>' +
-              '<span style="font-size:12.5px; line-height:1.7;">' +
-              parts.join(' <span style="color:var(--ink-faint)">&rarr;</span> ') + '</span></li>';
-          }).join('') + '</ul>';
-        } else {
-          html = '<p class="empty-hint">No exploitable path matched this query.</p>';
-        }
-        html += excludedList(statuses.filter(function (s) { return s.status !== 'included'; }));
-        els.body.innerHTML = html;
-      }
-    },
-
     unused: {
       id: 'unused',
       known: [
@@ -1571,7 +1066,6 @@ RETURN r, role, g.action, d</textarea>
         if (uc.pathQuery) {
           try { ctx.pathRows = await postQuery(uc.pathQuery); } catch (e) { ctx.pathRows = null; }
         }
-        ctx.amounts = costAmounts(ctx.primaryRows);
 
         els.error.hidden = true;
         var statuses = computeStatuses(uc, ctx);
@@ -1641,6 +1135,6 @@ RETURN r, role, g.action, d</textarea>
   });
 
   var initial = location.hash.slice(1);
-  selectTab(Object.prototype.hasOwnProperty.call(USE_CASES, initial) ? initial : 'cost');
+  selectTab(Object.prototype.hasOwnProperty.call(USE_CASES, initial) ? initial : 'unused');
 })();
 </script>
