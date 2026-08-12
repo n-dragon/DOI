@@ -20,7 +20,8 @@
 
 use crate::{AntiJoinStep, PlanStep, Planner, QueryPlan};
 use graph_dsl::{
-    ComparisonOp, ExistsSubquery, Literal, NodePattern, PatternStep, Query, WhereCondition,
+    ComparisonOp, ExistsSubquery, Literal, NodePattern, PatternStep, PropertyFilter, Query,
+    WhereCondition,
 };
 use graph_index::PropertyKey;
 
@@ -36,7 +37,25 @@ impl Planner for NaivePlanner {
             panic!("a pattern's first step is always a node");
         };
 
-        let mut plan_steps = vec![resolve_start_or_all_step(first)];
+        // A WHERE condition targeting the start alias itself
+        // (`MATCH (role:IAMRole) WHERE role.is_admin = true`, no hop at
+        // all) used to be silently dropped here — only a hop-target's
+        // WHERE conditions were ever routed anywhere (the loop below,
+        // building each ExpandHop's `filters`). Same extraction, applied
+        // to `first` instead of `to_node`, so the start node gets a
+        // chance at its own WHERE conditions too.
+        let start_where_filters = query
+            .where_conditions
+            .iter()
+            .filter_map(|c| match c {
+                WhereCondition::Property(alias, filter) if alias == &first.alias => {
+                    Some(filter.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let mut plan_steps = vec![resolve_start_or_all_step(first, &start_where_filters)];
         let mut from_alias = first.alias.clone();
         let mut i = 1;
 
@@ -105,19 +124,50 @@ impl Planner for NaivePlanner {
     }
 }
 
-fn resolve_start_or_all_step(node: &NodePattern) -> PlanStep {
+fn resolve_start_or_all_step(node: &NodePattern, where_filters: &[PropertyFilter]) -> PlanStep {
     let label = node
         .label
         .as_ref()
         .expect("v1's naive planner requires a labeled start node");
 
-    match node.property_filters.first() {
-        Some(filter) => PlanStep::ResolveStart {
+    // Inline map filter (`{property: value}`) wins if present — same
+    // equality-only shape `ResolveStart` already supports, and it was
+    // already here before `where_filters` existed. Otherwise fall back
+    // to a WHERE condition on the start alias, but only when it's a
+    // single equality check: `ResolveStart` is one indexed point lookup,
+    // it has no post-filter step the way `ExpandHop` does (`filters` +
+    // `evaluate_filter`) — a non-equality op or more than one condition
+    // can't be represented by it. Panic rather than silently planning a
+    // `ResolveAll` that drops the condition and returns every node of
+    // the label, same posture this module already takes for shapes v1
+    // doesn't support (see the module doc comment).
+    let filter = node.property_filters.first().or_else(|| {
+        match where_filters {
+            [] => None,
+            [single] => Some(single),
+            multiple => panic!(
+                "v1's ResolveStart supports at most one WHERE condition on the pattern's \
+                 start node ({count} target {alias}.*) — split into a chained MATCH instead",
+                count = multiple.len(),
+                alias = node.alias
+            ),
+        }
+    });
+
+    match filter {
+        Some(filter) if filter.op == ComparisonOp::Eq => PlanStep::ResolveStart {
             alias: node.alias.clone(),
             label_or_type: label.0.clone(),
             property: filter.property.clone(),
             key: literal_to_property_key(&filter.value),
         },
+        Some(filter) => panic!(
+            "v1's ResolveStart only supports an equality filter on the pattern's start node \
+             ({op:?} on {alias}.{property} isn't an index lookup key)",
+            op = filter.op,
+            alias = node.alias,
+            property = filter.property
+        ),
         // *(least-privilege-via-telemetry use case)* No filter at all —
         // `MATCH (w:Workload)` — resolve every node of the label rather
         // than requiring a lookup key that doesn't exist for this shape.
@@ -307,6 +357,53 @@ mod tests {
             }
             other => panic!("expected ResolveAll, got {other:?}"),
         }
+    }
+
+    /// Regression test: a `WHERE` equality condition on the pattern's
+    /// *start* alias (`MATCH (role:IAMRole) WHERE role.is_admin = true`,
+    /// no hop at all) used to be silently dropped — nothing ever routed
+    /// it anywhere, so the planner fell through to `ResolveAll` and the
+    /// query returned every `IAMRole` regardless of `is_admin`. It must
+    /// plan the same `ResolveStart` an equivalent inline filter would.
+    #[test]
+    fn routes_a_where_condition_on_the_start_alias_into_resolve_start() {
+        let plan = plan_of(r#"MATCH (role:IAMRole) WHERE role.is_admin = true RETURN role"#);
+
+        assert_eq!(plan.steps.len(), 1);
+        match &plan.steps[0] {
+            PlanStep::ResolveStart {
+                alias,
+                label_or_type,
+                property,
+                key,
+            } => {
+                assert_eq!(alias, "role");
+                assert_eq!(label_or_type, "IAMRole");
+                assert_eq!(property, "is_admin");
+                assert_eq!(*key, PropertyKey::Bool(true));
+            }
+            other => panic!("expected ResolveStart, got {other:?}"),
+        }
+    }
+
+    /// A non-equality `WHERE` condition on the start alias can't be
+    /// represented by `ResolveStart` (one indexed point lookup, no
+    /// post-filter step) — this must panic rather than silently plan a
+    /// `ResolveAll` that drops the condition.
+    #[test]
+    #[should_panic(expected = "only supports an equality filter")]
+    fn panics_on_a_non_equality_where_condition_on_the_start_alias() {
+        plan_of(r#"MATCH (d:DataStore) WHERE d.name > "m" RETURN d"#);
+    }
+
+    /// Same posture for more than one `WHERE` condition on the start
+    /// alias — still one indexed point lookup, still no post-filter step.
+    #[test]
+    #[should_panic(expected = "at most one WHERE condition")]
+    fn panics_on_multiple_where_conditions_on_the_start_alias() {
+        plan_of(
+            r#"MATCH (d:DataStore) WHERE d.name = "s3-ops-logs" AND d.classification = "internal" RETURN d"#,
+        );
     }
 
     /// The least-privilege-via-telemetry use case's central query
