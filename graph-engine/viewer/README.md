@@ -1,33 +1,29 @@
 # Graph viewer
 
-`index.html` — no build step, no client-side dataset, no query logic in
-the browser. Two tabs, two questions asked of the **same** graph:
+`index.html` — no client-side dataset, no query logic in the browser.
+Two tabs:
 
-- **Cloud cost** — the spec §7.1-style example query
-  (`OWNS`/`CONTAINS*1..3`/`HAS_COST` join, filtered on cost).
-- **Attack paths** — a security-posture traversal: is there a chain from
-  an internet-facing, vulnerable resource, through the IAM role it runs
-  as, through up to three `CAN_ASSUME` hops, to a role that can read a
-  store classified `pii`?
+- **Unused permissions** — the least-privilege-via-telemetry use case:
+  cross-references declared IAM access (`RUNS_AS`/`CAN_READ`) against
+  observed access telemetry (`ACCESSED`) via a correlated `NOT EXISTS`
+  anti-join, live against a running coordinator.
+- **Architecture** — static reference content (API/storage/index/engine
+  choices), no live query surface.
 
-Both traverse the same `Resource` nodes — the billing feed and the
-posture feed are joined to the inventory by edges, not by a runtime join
-between two systems. That sharing is the point of the demo.
+Everything on the Unused permissions tab is served by `graph-viewer-server`
+(`bin/graph-viewer-server`), a thin HTTP↔gRPC bridge: it serves this
+static page and proxies the query panel's `POST /api/query` to
+`GraphService::ExecuteQuery` on a running coordinator. Nothing here
+re-implements traversal or filtering — the DSL text you type goes to the
+real parser/planner/executor and comes back as real results (via the
+coordinator's `GetNodeProperties`/`GetEdgeProperties` RPCs, which hydrate
+each matched id with its actual property record).
 
-The attack-path tab is the one that fits the engine's shape best: the
-answer is the *path itself*, so the deliberate absence of aggregation
-(§1.4) never bites, and bounded role-assumption hops are exactly the
-priority primitive of §7.1. The cost tab is honest about the opposite —
-"how much does the team spend" is a `SUM`, which this engine leaves to
-whatever consumes the streamed rows.
-
-Everything is served by `graph-viewer-server` (`bin/graph-viewer-server`),
-a thin HTTP↔gRPC bridge: it serves this static page and proxies each
-query panel's `POST /api/query` to `GraphService::ExecuteQuery` on a
-running coordinator. Nothing here re-implements traversal or filtering —
-the DSL text you type goes to the real parser/planner/executor and comes
-back as real results (via the coordinator's `GetNodeProperties` RPC,
-which hydrates each matched `NodeId` with its actual property record).
+The one client-side dependency is the diagram itself:
+[react-force-graph](https://github.com/vasturiano/react-force-graph)
+(2D), bundled locally into `vendor/force-graph-widget.js` — see
+"The diagram" below — so the page still has zero CDN dependency at
+runtime, just like the query path.
 
 ## Running it
 
@@ -40,8 +36,7 @@ cargo run -p ingest-cloud-cost
 
 # 2. the partition node — needs the schema both it and the coordinator
 #    parse (schema/cloud_cost.graphidl matches examples/ingest-cloud-cost
-#    exactly; it's what the WHERE/RETURN clauses get validated against,
-#    and it now carries both lenses: CostRecord *and* IAMRole/DataStore)
+#    exactly; it's what the WHERE/RETURN clauses get validated against)
 GRAPH_SCHEMA_PATH=schema/cloud_cost.graphidl cargo run -p graph-partition-node
 
 # 3. the coordinator — same schema path
@@ -53,8 +48,7 @@ cargo run -p graph-viewer-server
 
 Run each from `graph-engine/` (relative paths like `./warehouse` and
 `schema/cloud_cost.graphidl` are resolved from the current directory).
-Then open <http://localhost:8080> — or <http://localhost:8080#security>
-to land straight on the attack-path tab. `GRAPH_COORDINATOR_ADDR`,
+Then open <http://localhost:8080>. `GRAPH_COORDINATOR_ADDR`,
 `GRAPH_VIEWER_STATIC_DIR`, `GRAPH_VIEWER_LISTEN_ADDR`,
 `GRAPH_PARTITION_NODE_ADDR`, `GRAPH_WAREHOUSE_PATH`, and
 `GRAPH_CATALOG_DB_PATH` override the defaults if you're not running
@@ -70,31 +64,55 @@ comes back and shows inline, same as it would from `query-client`.
 ### What the highlighting means
 
 Each run issues more than one real query, so the diagram can distinguish
-three different reasons a node isn't in your result:
+different reasons a node isn't in your result:
 
 | State | Meaning |
 |---|---|
-| solid ring + badge | matched and projected by your `RETURN` |
-| dashed ring, "traversed, not projected" | the traversal walked through it, but no returned alias binds it — the middle hop of a `*1..3` range |
+| purple ring + badge | matched and projected by your `RETURN` |
 | greyed, "reached — filtered out by `WHERE`" | your pattern reached it; the `WHERE` clause rejected it |
 | greyed, "not reached by this pattern" | the traversal never got there at all |
 
-The second row is why the attack-path tab issues a third query (the
-`CAN_ASSUME` chain on its own): `RETURN` only *projects*, so without it
-the pivot role would be drawn as unreachable even though the traversal
-went straight through it. The third row comes from re-running your own
-pattern with its `WHERE` clause stripped. Both are best-effort — if
-either fails, the primary result still stands.
+The second query is your own pattern re-run with its `WHERE` clause
+stripped, so the diagram can tell those two greyed-out states apart.
+Best-effort — if it fails, the primary result still stands.
 
-### The dataset is built to have decoys
+### The dataset is built to have a decoy
 
-The attack-path query returns exactly one of three near-identical-looking
-resources. The other two are there to be rejected, for two different
-reasons — same CVE but not internet-facing, versus internet-facing but
-whose role reaches nothing classified. A rule-per-resource scanner raises
-all three; only the path tells them apart.
+`i-checkout-api-1` and `i-checkout-api-2` run as the same role and hold
+the same declared `CAN_READ` grant on the PII store — identical on paper.
+Only one of them has an `ACCESSED` edge into that store; the other is the
+finding. A rule-per-resource scanner (or a CSPM that only reads declared
+policy) can't tell them apart — the `NOT EXISTS` anti-join is what does.
 
 The palette is a visual homage to Datadog's brand purple
-(`#632CA6` / `#8000FF`) — chosen because this dataset mirrors
-Datadog's Cloud Cost Management and Cloud Security products, not because
-this is an official Datadog asset.
+(`#632CA6` / `#8000FF`) — chosen because this dataset mirrors Datadog's
+Cloud Security posture products, not because this is an official Datadog
+asset.
+
+## The diagram
+
+The force-directed diagram is a React component
+([react-force-graph-2d](https://github.com/vasturiano/react-force-graph))
+mounted imperatively from the page's plain-JS query/status logic — only
+the diagram itself is React; the rest of the page (tabs, query editor,
+results panel) stays vanilla JS/DOM, same as before.
+
+- `force-graph-widget-src/entry.js` — the component source: custom
+  canvas node/link rendering that reproduces this page's status
+  language (included/excluded/dimmed, badges, the always-on `ACCESSED`
+  edge), reading colors from the page's CSS custom properties so
+  light/dark theming stays centralized in `index.html`. Exposes
+  `window.DOIForceGraph.render(container, {nodes, links, mode})`.
+- `vendor/force-graph-widget.js` — the built artifact `index.html`
+  actually loads: React, ReactDOM, and react-force-graph-2d bundled into
+  one self-hosted, dependency-free file (esbuild, IIFE). Checked in like
+  a compiled binary would be — there's no build step in CI/deploy for
+  this page, so the artifact has to be ready to serve as-is.
+
+To change the diagram, edit `force-graph-widget-src/entry.js`, then:
+
+```sh
+cd force-graph-widget-src
+npm install   # first time only
+./build.sh    # rewrites ../vendor/force-graph-widget.js
+```

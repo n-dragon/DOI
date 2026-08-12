@@ -1,0 +1,16 @@
+{
+  "name": "force-graph-widget-src",
+  "private": true,
+  "description": "Build source for viewer/vendor/force-graph-widget.js — see build.sh",
+  "scripts": {
+    "build": "./build.sh"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-force-graph-2d": "^1.29.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

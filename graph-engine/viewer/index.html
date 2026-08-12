@@ -269,100 +269,14 @@
     outline-offset: 2px;
   }
 
-  svg.graph {
+  /* Node/link colors, status dimming, and badge text are all drawn on
+     canvas by viewer/force-graph-widget-src (react-force-graph-2d) —
+     this container just needs to hold a size before its ResizeObserver
+     measures it. */
+  .force-graph {
     width: 100%;
-    height: auto;
-    display: block;
+    min-height: 380px;
   }
-
-  svg.graph text { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  svg.graph text.mono { font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
-
-  .edge {
-    fill: none;
-    stroke: var(--ink-faint);
-    stroke-width: 1.6;
-  }
-  .edge--cost {
-    stroke: var(--ink-faint);
-    stroke-width: 1.3;
-    stroke-dasharray: 3 4;
-  }
-
-  /* Observed access (ACCESSED) — deliberately outside the query-mode
-     in-range/out-of-range toggle (`applyToSvg`'s `endpoints` rule):
-     it's ground truth about the dataset, not something a query result
-     lights up or dims, so it stays the same in both diagram modes. */
-  .edge--accessed {
-    fill: none;
-    stroke: var(--node-rds);
-    stroke-width: 2;
-  }
-  .edge--accessed-label {
-    font-size: 10px;
-    fill: var(--node-rds);
-    font-weight: 600;
-  }
-
-  .node rect {
-    stroke-width: 1.6;
-    transition: fill 0.15s ease, stroke 0.15s ease, opacity 0.15s ease;
-  }
-  .node .label { font-size: 12.5px; font-weight: 600; fill: #fff; }
-  .node .sub { font-size: 10px; fill: rgba(255,255,255,0.82); }
-  .node.node--cost .label,
-  .node.node--cost .sub { fill: var(--ink); }
-  .node.node--cost rect { fill: var(--surface-2); stroke: var(--node-cost); }
-
-  .why {
-    font-size: 10px;
-    fill: var(--excluded-text);
-    opacity: 0;
-    transition: opacity 0.15s ease;
-  }
-  .badge {
-    opacity: 0;
-    transition: opacity 0.15s ease;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .node rect, .why, .badge, .edge, .edge--cost { transition: none; }
-  }
-
-  /* ---- query mode state ---- */
-  .usecase.mode-query .node[data-status="excluded"] rect {
-    fill: var(--excluded-fill);
-    stroke: var(--excluded-stroke);
-  }
-  .usecase.mode-query .node[data-status="excluded"] .label,
-  .usecase.mode-query .node[data-status="excluded"] .sub { fill: var(--excluded-text); }
-  .usecase.mode-query .node[data-status="excluded"] .why { opacity: 1; }
-
-  .usecase.mode-query .node[data-status="included"] rect {
-    stroke: var(--result-ring);
-    stroke-width: 3;
-  }
-  .usecase.mode-query .node[data-status="included"] .badge { opacity: 1; }
-
-  .usecase.mode-query .edge.edge--in-range { stroke: var(--accent-flow); stroke-width: 2.2; }
-  .usecase.mode-query .edge.edge--out-of-range { stroke: var(--excluded-stroke); stroke-dasharray: 2 4; }
-
-  /* A node the traversal walked *through* but that no returned alias
-     projects — the intermediate hop of a `*1..3` range. Neither a
-     result nor a rejection, so it gets its own state rather than being
-     greyed out like something the pattern never reached. */
-  .usecase.mode-query .node[data-status="traversed"] rect {
-    stroke: var(--node-traversed);
-    stroke-width: 2;
-    stroke-dasharray: 4 3;
-  }
-  .usecase.mode-query .node[data-status="traversed"] .why { opacity: 1; }
-
-  .usecase.mode-query .edge--cost[data-result="included"] { stroke: var(--result-ring); stroke-width: 2; }
-  .usecase.mode-query .edge--cost[data-result="excluded"] { stroke: var(--excluded-stroke); }
-
-  /* full-graph mode: hide query-only chrome */
-  .usecase:not(.mode-query) .node[data-status] rect { stroke: var(--border); }
 
   .side {
     display: flex;
@@ -604,80 +518,10 @@
         </div>
       </div>
 
-      <svg class="graph" viewBox="0 0 900 380" role="img" aria-label="Graph of two identical workloads that both declare the same permission to read a PII store, with access telemetry showing only one of them ever used it — the current query's finding highlighted in query mode.">
-        <defs>
-          <marker id="arrow-unused" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L8,4 L0,8 z" fill="var(--ink-faint)"></path>
-          </marker>
-          <marker id="arrow-accessed" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L8,4 L0,8 z" fill="var(--node-rds)"></path>
-          </marker>
-        </defs>
-
-        <text x="110" y="30" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">workloads</text>
-        <text x="450" y="30" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">runs as</text>
-        <text x="780" y="30" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">declared read access</text>
-
-        <!-- RUNS_AS -->
-        <g>
-          <line class="edge" data-from="i1" data-to="role" marker-end="url(#arrow-unused)" x1="210" y1="90" x2="350" y2="176"></line>
-          <line class="edge" data-from="i2" data-to="role" marker-end="url(#arrow-unused)" x1="210" y1="290" x2="350" y2="204"></line>
-        </g>
-
-        <!-- CAN_READ (declared) -->
-        <g>
-          <line class="edge edge--cost" data-from="role" data-to="store" marker-end="url(#arrow-unused)" x1="550" y1="190" x2="680" y2="190"></line>
-        </g>
-
-        <!-- ACCESSED (observed telemetry) — always drawn, not toggled by
-             query mode: it's ground truth about the dataset, and it's
-             the proof, not a query result in its own right. -->
-        <g>
-          <line class="edge--accessed" marker-end="url(#arrow-accessed)" x1="205" y1="68" x2="690" y2="172"></line>
-          <text class="edge--accessed-label mono" x="430" y="105" text-anchor="middle">ACCESSED · s3:GetObject · 2024-07-01</text>
-        </g>
-
-        <!-- workloads -->
-        <g class="node" data-id="i1" data-node-key="Resource:i-checkout-api-1" data-status="excluded">
-          <rect x="10" y="54" width="200" height="56" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
-          <text class="label" x="110" y="76" text-anchor="middle">i-checkout-api-1</text>
-          <text class="sub mono" x="110" y="91" text-anchor="middle">Resource · ec2_instance</text>
-          <text class="why" x="110" y="126" text-anchor="middle"></text>
-          <text class="badge mono" x="110" y="126" text-anchor="middle" fill="var(--danger)"></text>
-          <title>Resource · i-checkout-api-1 · has an ACCESSED edge into the PII store, 2024-07-01 — the permission is in use</title>
-        </g>
-
-        <g class="node" data-id="i2" data-node-key="Resource:i-checkout-api-2" data-status="included">
-          <rect x="10" y="270" width="200" height="56" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
-          <text class="label" x="110" y="292" text-anchor="middle">i-checkout-api-2</text>
-          <text class="sub mono" x="110" y="307" text-anchor="middle">Resource · ec2_instance</text>
-          <text class="why" x="110" y="342" text-anchor="middle"></text>
-          <text class="badge mono" x="110" y="342" text-anchor="middle" fill="var(--danger)"></text>
-          <title>Resource · i-checkout-api-2 · same role, same declared grant, no ACCESSED edge at all — never used it</title>
-        </g>
-
-        <!-- role -->
-        <g class="node" data-id="role" data-node-key="IAMRole:role-checkout-api" data-status="included">
-          <rect x="350" y="162" width="200" height="56" rx="8" fill="var(--node-role)" stroke="var(--node-role)"></rect>
-          <text class="label" x="450" y="184" text-anchor="middle">role-checkout-api</text>
-          <text class="sub mono" x="450" y="199" text-anchor="middle">IAMRole · not admin</text>
-          <text class="why" x="450" y="234" text-anchor="middle"></text>
-          <text class="badge mono" x="450" y="234" text-anchor="middle" fill="var(--danger)"></text>
-          <title>IAMRole · role-checkout-api · declares s3:GetObject on the PII store, action shared verbatim with ACCESSED.action</title>
-        </g>
-
-        <!-- store -->
-        <g class="node" data-id="store" data-node-key="DataStore:s3-customer-exports" data-status="included">
-          <rect x="680" y="162" width="200" height="56" rx="8" fill="var(--node-store)" stroke="var(--danger)" stroke-width="2.5"></rect>
-          <text class="label" x="780" y="184" text-anchor="middle">s3-customer-exports</text>
-          <text class="sub mono" x="780" y="199" text-anchor="middle">DataStore · pii</text>
-          <text class="why" x="780" y="234" text-anchor="middle"></text>
-          <text class="badge mono" x="780" y="234" text-anchor="middle" fill="var(--danger)"></text>
-          <title>DataStore · s3-customer-exports · classification pii — the sensitive store this finding protects</title>
-        </g>
-      </svg>
+      <div class="force-graph" data-role="force-graph" role="img" aria-label="Force-directed graph of two identical workloads that both declare the same permission to read a PII store, with access telemetry showing only one of them ever used it — the current query's finding highlighted in query mode. Drag nodes, hover for details."></div>
       <figcaption style="padding: 4px 4px 16px; font-size: 12px; color: var(--ink-faint);">
-        Solid arrow: <code class="mono">RUNS_AS</code>. Dashed: <code class="mono">CAN_READ</code>, the declared grant. Teal: <code class="mono">ACCESSED</code>, observed telemetry — drawn once, because only one workload has one. Hover any node for its properties.
+        Solid line: <code class="mono">RUNS_AS</code>. Dashed: <code class="mono">CAN_READ</code>, the declared grant. Teal: <code class="mono">ACCESSED</code>, observed telemetry — drawn once, because only one workload has one. Rendered with
+        <a href="https://github.com/vasturiano/react-force-graph" target="_blank" rel="noopener">react-force-graph</a> (bundled locally, <code class="mono">viewer/vendor/</code>) — drag nodes, hover for details.
       </figcaption>
     </div>
     <div class="card panel">
@@ -831,11 +675,16 @@ RETURN r, role, g.action, d</textarea>
   </section>
 
   <footer class="page">
-    <span>Rust · Apache Iceberg · custom traversal DSL</span>
+    <span>Rust · Apache Iceberg · custom traversal DSL · react-force-graph</span>
     <span>Palette is a homage to Datadog's brand purple (#632CA6 / #8000FF) — not an official Datadog asset</span>
   </footer>
 </div>
 
+<!-- React + react-force-graph-2d, bundled locally (build source in
+     force-graph-widget-src/, rebuild with force-graph-widget-src/build.sh)
+     — self-hosted so this page has no CDN dependency at runtime. Exposes
+     window.DOIForceGraph, used by the script below. -->
+<script src="vendor/force-graph-widget.js"></script>
 <script>
 (function () {
   // What this page knows about the dataset: which pre-drawn SVG box each
@@ -904,6 +753,44 @@ RETURN r, role, g.action, d</textarea>
         { svgId: 'role', key: 'IAMRole:role-checkout-api', name: 'role-checkout-api' },
         { svgId: 'store', key: 'DataStore:s3-customer-exports', name: 's3-customer-exports' }
       ],
+      // Fed to window.DOIForceGraph.render (viewer/force-graph-widget-src)
+      // — node fx/fy are fixed (still draggable) so the layout reads
+      // left-to-right (workloads -> role -> declared access) instead of
+      // wherever the force simulation happens to settle 4 free nodes.
+      diagram: {
+        nodes: [
+          {
+            id: 'i1', kind: 'compute', name: 'i-checkout-api-1', sub: 'Resource · ec2_instance',
+            fx: -340, fy: -108,
+            title: 'Resource · i-checkout-api-1 · has an ACCESSED edge into the PII store, 2024-07-01 — the permission is in use'
+          },
+          {
+            id: 'i2', kind: 'compute', name: 'i-checkout-api-2', sub: 'Resource · ec2_instance',
+            fx: -340, fy: 108,
+            title: 'Resource · i-checkout-api-2 · same role, same declared grant, no ACCESSED edge at all — never used it'
+          },
+          {
+            id: 'role', kind: 'role', name: 'role-checkout-api', sub: 'IAMRole · not admin',
+            fx: 0, fy: 0,
+            title: 'IAMRole · role-checkout-api · declares s3:GetObject on the PII store, action shared verbatim with ACCESSED.action'
+          },
+          {
+            id: 'store', kind: 'store', name: 's3-customer-exports', sub: 'DataStore · pii',
+            fx: 330, fy: 0, highlight: true,
+            title: 'DataStore · s3-customer-exports · classification pii — the sensitive store this finding protects'
+          }
+        ],
+        links: [
+          { source: 'i1', target: 'role', kind: 'runs_as', title: 'RUNS_AS' },
+          { source: 'i2', target: 'role', kind: 'runs_as', title: 'RUNS_AS' },
+          { source: 'role', target: 'store', kind: 'can_read', title: 'CAN_READ · s3:GetObject (declared)' },
+          {
+            source: 'i1', target: 'store', kind: 'accessed',
+            label: 'ACCESSED · s3:GetObject · 2024-07-01',
+            title: 'ACCESSED · s3:GetObject · 2024-07-01 (observed telemetry)'
+          }
+        ]
+      },
       edgeRule: 'endpoints',
       pathQuery: null,
       fullStats: [
@@ -980,47 +867,38 @@ RETURN r, role, g.action, d</textarea>
     });
   }
 
-  function applyToSvg(section, uc, statuses) {
+  // Builds the {nodes, links, mode} props window.DOIForceGraph.render
+  // expects (viewer/force-graph-widget-src/entry.js) from uc.diagram's
+  // static layout plus per-node status computed by computeStatuses.
+  // Only the 'endpoints' edgeRule is implemented — the only use case left
+  // on this page (unused permissions) uses it; the cost tab's data-hop
+  // rule went with it when that tab was removed.
+  function diagramProps(uc, statuses, queryMode) {
     var byId = {};
-    statuses.forEach(function (s) { byId[s.svgId] = s; });
+    (statuses || []).forEach(function (s) { byId[s.svgId] = s; });
+    var walked = function (id) {
+      var s = byId[id];
+      return !!s && (s.status === 'included' || s.status === 'traversed');
+    };
 
-    statuses.forEach(function (s) {
-      var node = section.querySelector('.node[data-id="' + s.svgId + '"]');
-      if (!node) return;
-      node.setAttribute('data-status', s.status);
-      var badge = node.querySelector('.badge');
-      var why = node.querySelector('.why');
-      if (badge) badge.textContent = s.status === 'included' ? (s.badge || '') : '';
-      if (why) why.textContent = s.status === 'included' ? '' : (s.reason || '');
-
-      var costEdge = section.querySelector('.edge--cost[data-id="' + s.svgId + '"]');
-      if (costEdge) costEdge.setAttribute('data-result', s.status === 'included' ? 'included' : 'excluded');
+    var nodes = uc.diagram.nodes.map(function (n) {
+      var s = byId[n.id];
+      var out = Object.assign({}, n);
+      if (s) {
+        out.status = s.status;
+        out.badge = s.badge;
+        out.reason = s.reason;
+      }
+      return out;
     });
-
-    if (uc.edgeRule === 'endpoints') {
-      // Both ends must be on the traversal. That's what keeps the edge
-      // from an excluded resource to an included role dark, even though
-      // the role itself is part of the finding.
-      var walked = function (id) {
-        var s = byId[id];
-        return !!s && (s.status === 'included' || s.status === 'traversed');
-      };
-      section.querySelectorAll('.edge[data-from][data-to]').forEach(function (edge) {
-        var lit = walked(edge.getAttribute('data-from')) && walked(edge.getAttribute('data-to'));
-        edge.classList.toggle('edge--in-range', lit);
-        edge.classList.toggle('edge--out-of-range', !lit);
-      });
-    } else {
-      // Each structural edge's data-id names the resource it leads to
-      // (hop 0, account->vpc, has none and is always on the path).
-      section.querySelectorAll('.edge[data-hop]').forEach(function (edge) {
-        var target = edge.getAttribute('data-id');
-        var status = target && byId[target];
-        var inRange = !target || (status && status.reached);
-        edge.classList.toggle('edge--in-range', inRange);
-        edge.classList.toggle('edge--out-of-range', !inRange);
-      });
-    }
+    var links = uc.diagram.links.map(function (l) {
+      var out = Object.assign({}, l);
+      if (l.kind !== 'accessed') {
+        out.state = walked(l.source) && walked(l.target) ? 'in-range' : 'out-of-range';
+      }
+      return out;
+    });
+    return { nodes: nodes, links: links, mode: queryMode ? 'query' : 'full', height: 380 };
   }
 
   function wireUp(uc) {
@@ -1029,10 +907,16 @@ RETURN r, role, g.action, d</textarea>
     var els = {
       full: el('btn-full'), query: el('btn-query'), run: el('btn-run'), reset: el('btn-reset'),
       input: el('query-input'), error: el('query-error'), status: el('query-status'),
-      title: el('results-title'), body: el('results-body')
+      title: el('results-title'), body: el('results-body'),
+      graph: el('force-graph')
     };
     var defaultQueryText = els.input.value;
     var last = null;
+
+    function renderDiagram(statuses) {
+      var queryMode = section.classList.contains('mode-query');
+      window.DOIForceGraph.render(els.graph, diagramProps(uc, statuses, queryMode));
+    }
 
     function renderFull() {
       els.title.textContent = 'Dataset';
@@ -1046,6 +930,7 @@ RETURN r, role, g.action, d</textarea>
       section.classList.toggle('mode-query', queryMode);
       els.full.setAttribute('aria-pressed', String(!queryMode));
       els.query.setAttribute('aria-pressed', String(queryMode));
+      renderDiagram(last ? last.statuses : null);
       if (queryMode && last) uc.renderResults(last.statuses, last.ctx, els);
       else if (!queryMode) renderFull();
     }
@@ -1070,7 +955,7 @@ RETURN r, role, g.action, d</textarea>
         els.error.hidden = true;
         var statuses = computeStatuses(uc, ctx);
         last = { statuses: statuses, ctx: ctx };
-        applyToSvg(section, uc, statuses);
+        renderDiagram(statuses);
         els.status.textContent = ctx.primaryRows.length + ' row' +
           (ctx.primaryRows.length === 1 ? '' : 's') + ' back from the live coordinator just now.';
         if (switchToQueryMode) setMode(true);
@@ -1094,6 +979,7 @@ RETURN r, role, g.action, d</textarea>
       runQuery(true);
     });
 
+    renderDiagram(null);
     renderFull();
   }
 
