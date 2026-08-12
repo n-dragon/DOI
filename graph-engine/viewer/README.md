@@ -1,7 +1,7 @@
 # Graph viewer
 
-`index.html` — no client-side dataset, no query logic in the browser.
-Two tabs:
+`index.html` — no client-side dataset for the live tab, no query logic in
+the browser. Three tabs:
 
 - **Unused permissions** — the least-privilege-via-telemetry use case:
   cross-references declared IAM access (`RUNS_AS`/`CAN_READ`) against
@@ -9,6 +9,9 @@ Two tabs:
   anti-join, live against a running coordinator.
 - **Architecture** — static reference content (API/storage/index/engine
   choices), no live query surface.
+- **Datadog fleet** — the 1000-node synthetic dataset from
+  `examples/datadog-dataset`, rendered in 3D, static (no coordinator
+  needed). See "The diagrams" below.
 
 Everything on the Unused permissions tab is served by `graph-viewer-server`
 (`bin/graph-viewer-server`), a thin HTTP↔gRPC bridge: it serves this
@@ -19,11 +22,11 @@ real parser/planner/executor and comes back as real results (via the
 coordinator's `GetNodeProperties`/`GetEdgeProperties` RPCs, which hydrate
 each matched id with its actual property record).
 
-The one client-side dependency is the diagram itself:
-[react-force-graph](https://github.com/vasturiano/react-force-graph)
-(2D), bundled locally into `vendor/force-graph-widget.js` — see
-"The diagram" below — so the page still has zero CDN dependency at
-runtime, just like the query path.
+The client-side dependency is the diagrams themselves:
+[react-force-graph](https://github.com/vasturiano/react-force-graph) (2D
+for Unused permissions, 3D for Datadog fleet), bundled locally into
+`vendor/` — see "The diagrams" below — so the page still has zero CDN
+dependency at runtime, just like the query path.
 
 ## Running it
 
@@ -89,30 +92,44 @@ The palette is a visual homage to Datadog's brand purple
 Cloud Security posture products, not because this is an official Datadog
 asset.
 
-## The diagram
+## The diagrams
 
-The force-directed diagram is a React component
-([react-force-graph-2d](https://github.com/vasturiano/react-force-graph))
-mounted imperatively from the page's plain-JS query/status logic — only
-the diagram itself is React; the rest of the page (tabs, query editor,
-results panel) stays vanilla JS/DOM, same as before.
+Both force-directed diagrams are React components
+([react-force-graph](https://github.com/vasturiano/react-force-graph))
+mounted imperatively from the page's plain-JS logic — only the diagrams
+themselves are React; the rest of the page (tabs, query editor, results
+panel) stays vanilla JS/DOM.
 
-- `force-graph-widget-src/entry.js` — the component source: custom
-  canvas node/link rendering that reproduces this page's status
-  language (included/excluded/dimmed, badges, the always-on `ACCESSED`
-  edge), reading colors from the page's CSS custom properties so
-  light/dark theming stays centralized in `index.html`. Exposes
-  `window.DOIForceGraph.render(container, {nodes, links, mode})`.
-- `vendor/force-graph-widget.js` — the built artifact `index.html`
-  actually loads: React, ReactDOM, and react-force-graph-2d bundled into
-  one self-hosted, dependency-free file (esbuild, IIFE). Checked in like
-  a compiled binary would be — there's no build step in CI/deploy for
-  this page, so the artifact has to be ready to serve as-is.
+**Unused permissions** (2D, `force-graph-widget-src/entry.js` →
+`vendor/force-graph-widget.js`) — custom canvas node/link rendering that
+reproduces this page's status language (included/excluded/dimmed,
+badges, the always-on `ACCESSED` edge), reading colors from the page's
+CSS custom properties so light/dark theming stays centralized in
+`index.html`. Exposes `window.DOIForceGraph.render(container, {nodes,
+links, mode})`. Loaded eagerly (it's the default tab).
 
-To change the diagram, edit `force-graph-widget-src/entry.js`, then:
+**Datadog fleet** (3D, `force-graph-widget-src/entry-3d.js` →
+`vendor/force-graph-3d-widget.js`) — deliberately the opposite approach:
+no custom rendering at all, just `graphData` + `nodeAutoColorBy` +
+`linkDirectionalParticles`, the same three props upstream's own
+[large-graph example](https://github.com/vasturiano/react-force-graph/tree/master/example/large-graph)
+uses to make the point that a graph too big to hand-tune still reads
+fine off the library's defaults. Exposes
+`window.DOIForceGraph3D.render(container, {graphData, height})`. Bundles
+three.js (`3d-force-graph`), so unlike the 2D widget it's ~1.5MB —
+loaded lazily, only when the Datadog fleet tab is first opened
+(`loadFleet()` in `index.html`), not on every page load.
+
+Both bundles are checked in like a compiled binary would be — there's no
+build step in CI/deploy for this page, so the artifacts have to be ready
+to serve as-is. `vendor/datadog-graph.json` (the fleet tab's dataset,
+flattened from `examples/datadog-dataset/out/*.csv` by
+`examples/datadog-dataset/to_graph_json.py`) is checked in the same way.
+
+To change a diagram, edit the matching `entry*.js`, then:
 
 ```sh
 cd force-graph-widget-src
 npm install   # first time only
-./build.sh    # rewrites ../vendor/force-graph-widget.js
+./build.sh    # rewrites both vendor/force-graph-widget.js and vendor/force-graph-3d-widget.js
 ```

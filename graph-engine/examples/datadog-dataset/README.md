@@ -46,6 +46,15 @@ python3 generate_dataset.py [output_dir]   # defaults to ./out
 Deterministic — fixed seed, so a re-run produces byte-identical CSVs. Pure
 Python stdlib (`csv`, `random`), no dependencies.
 
+## Viewing it
+
+`python3 to_graph_json.py` flattens `out/*.csv` into one `{nodes, links}`
+JSON file (`viewer/vendor/datadog-graph.json` by default) — the shape
+`react-force-graph` takes directly as `graphData`. That's what the
+viewer's "Datadog fleet" tab renders in 3D (`viewer/README.md`'s "The
+diagrams" section). Re-run both scripts in sequence after changing
+`generate_dataset.py`.
+
 ## Loading it into the engine
 
 This script writes CSV, not Iceberg tables — it's a data-shape reference,
