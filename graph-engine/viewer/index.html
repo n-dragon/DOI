@@ -275,7 +275,7 @@
      measures it. */
   .force-graph {
     width: 100%;
-    min-height: 380px;
+    min-height: 520px;
   }
 
   /* react-force-graph-3d always paints its own background (dark, per
@@ -381,7 +381,10 @@
   .stat-row:last-child { border-bottom: 0; }
   .stat-row .n { font-weight: 600; }
 
-  .result-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .result-list {
+    list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
+    max-height: 480px; overflow-y: auto;
+  }
   .result-list li {
     display: flex;
     align-items: baseline;
@@ -492,11 +495,11 @@
       A CSPM tells you a role <em>can</em> read the PII store. It cannot tell you whether it
       <em>ever has</em> — that requires a second, independently-collected fact: access telemetry,
       joined against the declared grant. <code class="mono">i-checkout-api-1</code> and
-      <code class="mono">i-checkout-api-2</code> are identical twins — same role, same declared
-      reach — but only one of them has ever actually touched the store.
-      Declared access with no matching observed access, inside a trust window, is the finding.
-      That cross-reference is exactly what edge aliases and a correlated
-      <code class="mono">NOT EXISTS</code> were added to this DSL for.
+      <code class="mono">i-checkout-api-2</code> were the original identical twins — same role,
+      same declared reach, only one ever actually touched the store. The dataset behind this tab
+      now has 973 more workloads built the same way, across 10 roles and 10 stores: every node
+      below is real, and the query's <code class="mono">NOT EXISTS</code> anti-join is what tells
+      the ~180 that never used their grant from the ~800 that did.
     </p>
 
     <div class="poc-section">
@@ -525,17 +528,18 @@
       <div class="main-col">
     <div class="card diagram-card">
       <div class="diagram-toolbar">
-        <span class="diagram-title">prod-aws · declared grant vs. observed access</span>
+        <span class="diagram-title">prod-aws · full fleet, 988 nodes</span>
         <div class="toggle" role="group" aria-label="Diagram mode">
           <button type="button" data-role="btn-full" aria-pressed="true">full graph</button>
           <button type="button" data-role="btn-query" aria-pressed="false">query result</button>
         </div>
       </div>
 
-      <div class="force-graph" data-role="force-graph" role="img" aria-label="Force-directed graph of two identical workloads that both declare the same permission to read a PII store, with access telemetry showing only one of them ever used it — the current query's finding highlighted in query mode. Drag nodes, hover for details."></div>
-      <figcaption style="padding: 4px 4px 16px; font-size: 12px; color: var(--ink-faint);">
-        Solid line: <code class="mono">RUNS_AS</code>. Dashed: <code class="mono">CAN_READ</code>, the declared grant. Teal: <code class="mono">ACCESSED</code>, observed telemetry — drawn once, because only one workload has one. Rendered with
-        <a href="https://github.com/vasturiano/react-force-graph" target="_blank" rel="noopener">react-force-graph</a> (bundled locally, <code class="mono">viewer/vendor/</code>) — drag nodes, hover for details.
+      <div class="force-graph" data-role="force-graph" role="img" aria-label="Force-directed graph of the full Resource/IAMRole/DataStore fleet behind this tab — roughly 1000 workloads, roles, and data stores connected by RUNS_AS and CAN_READ. In query result mode, the workloads whose declared access was never actually used are highlighted red."></div>
+      <p class="empty-hint" data-role="diagram-status" style="padding: 4px 4px 8px;">Loading the full graph from the coordinator…</p>
+      <figcaption style="padding: 0 4px 16px; font-size: 12px; color: var(--ink-faint);">
+        Color: node type (full graph) or query match (query result — red is an unused permission). Line: <code class="mono">RUNS_AS</code> or <code class="mono">CAN_READ</code>, undifferentiated at this density. Rendered with
+        <a href="https://github.com/vasturiano/react-force-graph" target="_blank" rel="noopener">react-force-graph</a> (bundled locally, <code class="mono">viewer/vendor/</code>) — drag nodes, scroll to zoom, hover for details.
       </figcaption>
     </div>
     <div class="card panel">
@@ -562,7 +566,7 @@ RETURN r, role, g.action, d</textarea>
           <button type="button" data-role="btn-reset" class="btn btn-ghost">Reset</button>
         </div>
         <p class="query-error" data-role="query-error" role="alert" hidden></p>
-        <p class="empty-hint" data-role="query-status" style="margin-top:10px;">Two real round trips: your query, and the same pattern without <code class="mono">WHERE</code> (to tell &ldquo;declared, and used&rdquo; from &ldquo;never declared at all&rdquo;). <code class="mono">g.action</code> and the rest of <code class="mono">RETURN</code> are projected straight off the wire — no re-implemented traversal in this browser.</p>
+        <p class="empty-hint" data-role="query-status" style="margin-top:10px;">Your query, run against the live coordinator — plus two more, once per page load, that fetch the full graph structure (<code class="mono">RUNS_AS</code>/<code class="mono">CAN_READ</code>) the diagram draws. <code class="mono">g.action</code> and the rest of <code class="mono">RETURN</code> are projected straight off the wire — no re-implemented traversal in this browser.</p>
       </div>
 
       <div class="card panel">
@@ -572,8 +576,8 @@ RETURN r, role, g.action, d</textarea>
 
       <div class="card panel">
         <h2>Node types</h2>
-        <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-role)"></span><span class="name">IAMRole</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store); border:1.5px solid var(--danger)"></span><span class="name">DataStore · pii</span></div><div class="legend-row"><span class="swatch" style="background:transparent; border:2px solid var(--node-rds)"></span><span class="name">observed access (ACCESSED)</span></div></div>
-        <p class="empty-hint" style="margin-top:10px;">One shared inventory: <code class="mono">Resource</code>/<code class="mono">IAMRole</code>/<code class="mono">DataStore</code> nodes, with access telemetry joined onto them by an edge, not a separate copy of the graph.</p>
+        <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance (973)</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-role)"></span><span class="name">IAMRole (10)</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store)"></span><span class="name">DataStore (10, 3 pii)</span></div><div class="legend-row"><span class="swatch" style="background:var(--danger)"></span><span class="name">in query result mode: unused permission</span></div></div>
+        <p class="empty-hint" style="margin-top:10px;">One shared inventory: <code class="mono">Resource</code>/<code class="mono">IAMRole</code>/<code class="mono">DataStore</code> nodes. <code class="mono">ACCESSED</code> telemetry (715 edges) is cross-referenced by the query but not drawn — at this density it would just be noise.</p>
       </div>
 
       <div class="card panel">
@@ -592,10 +596,12 @@ RETURN r, role, g.action, d</textarea>
           answered from local memory.
         </p>
         <p class="empty-hint" style="margin-top:10px;">
-          <b style="color:var(--ink);">What this tab costs on the wire:</b> two round trips —
-          your query, and the same pattern without <code class="mono">WHERE</code>, so the UI can
-          tell &ldquo;declared and used&rdquo; from &ldquo;never declared at all&rdquo; on an
-          empty result. Nothing is computed in this browser.
+          <b style="color:var(--ink);">What this tab costs on the wire:</b> two broad queries
+          once per page load to build the ~988-node/~980-edge diagram
+          (<code class="mono">RUNS_AS</code>, <code class="mono">CAN_READ</code>), then one more
+          per "Run query" — the anti-join itself, ~180 rows back over 973 candidate resources.
+          Nothing is computed in this browser; the coordinator hydrates every node/edge property
+          returned.
         </p>
         <p class="empty-hint" style="margin-top:10px;">
           <b style="color:var(--ink);">Known gap:</b> the anti-join has no index to lean on —
@@ -765,6 +771,25 @@ RETURN r, role, g.action, d</textarea>
     return node && node.label && id !== null ? node.label + ':' + id : null;
   }
 
+  // Renders one RETURN'd value without assuming which shape it is — a
+  // node (`{label, properties}`), an edge (`{edge_type, properties}`), or
+  // a bare scalar (an `alias.property` projection). Used by
+  // renderResults so editing the query's RETURN clause doesn't break the
+  // results list.
+  function formatRowValue(value) {
+    if (value && typeof value === 'object') {
+      if (value.label) return value.label + ' ' + (identityOf(value) || '?');
+      if (value.edge_type) return value.edge_type;
+    }
+    return String(value);
+  }
+
+  function formatRow(row) {
+    return Object.keys(row).map(function (alias) {
+      return formatRowValue(row[alias]);
+    }).join(' <span style="color:var(--ink-faint)">&middot;</span> ');
+  }
+
   function keySet(rows) {
     var set = {};
     (rows || []).forEach(function (row) {
@@ -789,171 +814,88 @@ RETURN r, role, g.action, d</textarea>
     return body.rows || [];
   }
 
-  /// The same pattern with its WHERE clause removed — a second real
-  /// query, run by the real coordinator, used only to tell "the pattern
-  /// reached this node but WHERE rejected it" apart from "the pattern
-  /// never reached it at all". Returns null when there's no WHERE to
-  /// drop, in which case that distinction is simply not drawn.
-  function withoutWhere(text) {
-    var m = text.match(/^([\s\S]*?)\bWHERE\b[\s\S]*?(\bRETURN\b[\s\S]*)$/);
-    return m ? m[1] + m[2] : null;
-  }
+  var RESULT_LIST_CAP = 60;
 
   var USE_CASES = {
     unused: {
       id: 'unused',
-      known: [
-        { svgId: 'i1', key: 'Resource:i-checkout-api-1', name: 'i-checkout-api-1' },
-        { svgId: 'i2', key: 'Resource:i-checkout-api-2', name: 'i-checkout-api-2' },
-        { svgId: 'role', key: 'IAMRole:role-checkout-api', name: 'role-checkout-api' },
-        { svgId: 'store', key: 'DataStore:s3-customer-exports', name: 's3-customer-exports' }
+      // Two broad queries that reconstruct the full graph the diagram
+      // draws — `from`/`to` name which RETURN alias is which endpoint, so
+      // buildStructureGraph() below can turn each row into one link
+      // without hardcoding per-query parsing.
+      structureQueries: [
+        { dsl: 'MATCH (r:Resource)-[:RUNS_AS]->(role:IAMRole)\nRETURN r, role', from: 'r', to: 'role' },
+        { dsl: 'MATCH (role:IAMRole)-[:CAN_READ]->(d:DataStore)\nRETURN role, d', from: 'role', to: 'd' }
       ],
-      // Fed to window.DOIForceGraph.render (viewer/force-graph-widget-src)
-      // — node fx/fy are fixed (still draggable) so the layout reads
-      // left-to-right (workloads -> role -> declared access) instead of
-      // wherever the force simulation happens to settle 4 free nodes.
-      diagram: {
-        nodes: [
-          {
-            id: 'i1', kind: 'compute', name: 'i-checkout-api-1', sub: 'Resource · ec2_instance',
-            fx: -340, fy: -108,
-            title: 'Resource · i-checkout-api-1 · has an ACCESSED edge into the PII store, 2024-07-01 — the permission is in use'
-          },
-          {
-            id: 'i2', kind: 'compute', name: 'i-checkout-api-2', sub: 'Resource · ec2_instance',
-            fx: -340, fy: 108,
-            title: 'Resource · i-checkout-api-2 · same role, same declared grant, no ACCESSED edge at all — never used it'
-          },
-          {
-            id: 'role', kind: 'role', name: 'role-checkout-api', sub: 'IAMRole · not admin',
-            fx: 0, fy: 0,
-            title: 'IAMRole · role-checkout-api · declares s3:GetObject on the PII store, action shared verbatim with ACCESSED.action'
-          },
-          {
-            id: 'store', kind: 'store', name: 's3-customer-exports', sub: 'DataStore · pii',
-            fx: 330, fy: 0, highlight: true,
-            title: 'DataStore · s3-customer-exports · classification pii — the sensitive store this finding protects'
-          }
-        ],
-        links: [
-          { source: 'i1', target: 'role', kind: 'runs_as', title: 'RUNS_AS' },
-          { source: 'i2', target: 'role', kind: 'runs_as', title: 'RUNS_AS' },
-          { source: 'role', target: 'store', kind: 'can_read', title: 'CAN_READ · s3:GetObject (declared)' },
-          {
-            source: 'i1', target: 'store', kind: 'accessed',
-            label: 'ACCESSED · s3:GetObject · 2024-07-01',
-            title: 'ACCESSED · s3:GetObject · 2024-07-01 (observed telemetry)'
-          }
-        ]
-      },
-      edgeRule: 'endpoints',
-      pathQuery: null,
       fullStats: [
-        ['Nodes in this lens', '4'],
-        ['Edges in this lens', '4'],
+        ['Nodes in this lens', '988'],
+        ['Edges in this lens', '980'],
         ['Labels', 'Resource, IAMRole, DataStore'],
-        ['Whole dataset', '20 nodes · 23 edges']
+        ['Whole dataset', '1000 nodes · 1710 edges']
       ],
-      // Only a workload itself is "the finding" — role/store share the
-      // included ring (they're part of the same result row) but don't
-      // need their own repeated badge text.
-      badgeFor: function (known) {
-        return known.svgId === 'i1' || known.svgId === 'i2' ? 'unused permission' : '';
-      },
+      // Deliberately doesn't assume the default query's r/role/g.action/d
+      // shape — RETURN can bind any alias set, so this reads each row's
+      // own keys instead of hardcoded ones. That's what lets someone
+      // rewrite the query in the editor (different aliases, a totally
+      // different pattern) and still get a working results list, not
+      // just a working diagram.
       renderResults: function (statuses, ctx, els) {
         var rows = ctx.primaryRows;
-        els.title.textContent = 'Result — ' + rows.length + ' unused permission' + (rows.length === 1 ? '' : 's');
+        var shown = rows.slice(0, RESULT_LIST_CAP);
+        els.title.textContent = 'Result — ' + rows.length + ' row' + (rows.length === 1 ? '' : 's');
         var html;
         if (rows.length) {
-          html = '<ul class="result-list">' + rows.map(function (row) {
-            var resourceName = row.r ? identityOf(row.r) : '?';
-            var roleName = row.role ? identityOf(row.role) : '?';
-            var storeName = row.d ? identityOf(row.d) : '?';
-            var action = row['g.action'];
+          html = '<ul class="result-list">' + shown.map(function (row) {
             return '<li style="flex-direction:column; align-items:stretch; gap:4px;">' +
-              '<span class="mono" style="font-size:11.5px; color:var(--danger);">unused permission</span>' +
-              '<span style="font-size:12.5px; line-height:1.7;">' + resourceName +
-              ' <span style="color:var(--ink-faint)">via</span> ' + roleName +
-              ' <span style="color:var(--ink-faint)">&rarr;</span> ' + storeName +
-              (action ? ' <span class="mono" style="color:var(--ink-faint); font-size:11px;">(' + action + ')</span>' : '') +
-              '</span></li>';
+              '<span style="font-size:12.5px; line-height:1.7;">' + formatRow(row) + '</span></li>';
           }).join('') + '</ul>';
+          if (rows.length > RESULT_LIST_CAP) {
+            html += '<p class="empty-hint" style="margin-top:10px;">+ ' + (rows.length - RESULT_LIST_CAP) +
+              ' more not shown here — every row returned that also exists in the drawn graph is highlighted red in the diagram.</p>';
+          }
         } else {
-          html = '<p class="empty-hint">No unused permissions matched this query.</p>';
+          html = '<p class="empty-hint">No rows matched this query.</p>';
         }
-        html += excludedList(statuses.filter(function (s) { return s.status !== 'included'; }));
         els.body.innerHTML = html;
       }
     }
   };
 
-  function excludedList(excluded) {
-    if (!excluded.length) return '';
-    return '<p class="empty-hint" style="margin-top:12px; margin-bottom:6px;">Excluded, and why:</p>' +
-      '<ul class="result-list">' + excluded.map(function (s) {
-        return '<li style="border-left-color: var(--excluded-stroke);"><span>' + s.name +
-          '</span><span class="mono" style="color:var(--ink-faint); font-size:11.5px;">' +
-          s.reason + '</span></li>';
-      }).join('') + '</ul>';
+  // Turns uc.structureQueries' rows into the {nodes, links} shape
+  // window.DOIForceGraph.render (viewer/force-graph-widget-src) takes as
+  // graphData — one fetch per page load, cached by wireUp(), not re-run
+  // per query. Node identity is the same label+name key computeStatuses
+  // uses below, so a node discovered by one query and referenced again by
+  // another (every IAMRole shows up in both) collapses to one entry.
+  async function buildStructureGraph(uc) {
+    var nodesByKey = {};
+    var links = [];
+    for (var i = 0; i < uc.structureQueries.length; i++) {
+      var q = uc.structureQueries[i];
+      var rows = await postQuery(q.dsl);
+      rows.forEach(function (row) {
+        var srcNode = row[q.from], dstNode = row[q.to];
+        var srcKey = nodeKey(srcNode), dstKey = nodeKey(dstNode);
+        if (srcKey && !nodesByKey[srcKey]) {
+          nodesByKey[srcKey] = { id: srcKey, label: srcNode.label, name: identityOf(srcNode) };
+        }
+        if (dstKey && !nodesByKey[dstKey]) {
+          nodesByKey[dstKey] = { id: dstKey, label: dstNode.label, name: identityOf(dstNode) };
+        }
+        if (srcKey && dstKey) links.push({ source: srcKey, target: dstKey });
+      });
+    }
+    var nodes = Object.keys(nodesByKey).map(function (k) { return nodesByKey[k]; });
+    return { nodes: nodes, links: links };
   }
 
-  function computeStatuses(uc, ctx) {
-    var primary = keySet(ctx.primaryRows);
-    var reached = keySet(ctx.reachRows);
-    var onPath = keySet(ctx.pathRows);
-
-    return uc.known.map(function (known) {
-      var base = { svgId: known.svgId, key: known.key, name: known.name };
-      if (primary[known.key]) {
-        base.status = 'included';
-        base.badge = uc.badgeFor(known, ctx);
-      } else if (onPath[known.key]) {
-        base.status = 'traversed';
-        base.reason = 'traversed, not projected';
-      } else if (reached[known.key]) {
-        base.status = 'excluded';
-        base.reason = 'reached — filtered out by WHERE';
-      } else {
-        base.status = 'excluded';
-        base.reason = ctx.reachRows ? 'not reached by this pattern' : 'not returned by this query';
-      }
-      base.reached = base.status !== 'excluded' || !!reached[known.key];
-      return base;
-    });
-  }
-
-  // Builds the {nodes, links, mode} props window.DOIForceGraph.render
-  // expects (viewer/force-graph-widget-src/entry.js) from uc.diagram's
-  // static layout plus per-node status computed by computeStatuses.
-  // Only the 'endpoints' edgeRule is implemented — the only use case left
-  // on this page (unused permissions) uses it; the cost tab's data-hop
-  // rule went with it when that tab was removed.
-  function diagramProps(uc, statuses, queryMode) {
-    var byId = {};
-    (statuses || []).forEach(function (s) { byId[s.svgId] = s; });
-    var walked = function (id) {
-      var s = byId[id];
-      return !!s && (s.status === 'included' || s.status === 'traversed');
-    };
-
-    var nodes = uc.diagram.nodes.map(function (n) {
-      var s = byId[n.id];
-      var out = Object.assign({}, n);
-      if (s) {
-        out.status = s.status;
-        out.badge = s.badge;
-        out.reason = s.reason;
-      }
-      return out;
-    });
-    var links = uc.diagram.links.map(function (l) {
-      var out = Object.assign({}, l);
-      if (l.kind !== 'accessed') {
-        out.state = walked(l.source) && walked(l.target) ? 'in-range' : 'out-of-range';
-      }
-      return out;
-    });
-    return { nodes: nodes, links: links, mode: queryMode ? 'query' : 'full', height: 380 };
+  // A node's status is just "did it come back from the primary query" —
+  // at ~1000 nodes there's no per-node UI budget left for the small
+  // demo's finer reached/traversed/filtered-by-WHERE distinction (see
+  // git history for that version); the aggregate is in fullStats instead.
+  function computeStatuses(primaryRows) {
+    var primary = keySet(primaryRows);
+    return Object.keys(primary).map(function (key) { return { key: key, status: 'included' }; });
   }
 
   function wireUp(uc) {
@@ -963,14 +905,36 @@ RETURN r, role, g.action, d</textarea>
       full: el('btn-full'), query: el('btn-query'), run: el('btn-run'), reset: el('btn-reset'),
       input: el('query-input'), error: el('query-error'), status: el('query-status'),
       title: el('results-title'), body: el('results-body'),
-      graph: el('force-graph')
+      graph: el('force-graph'), diagramStatus: el('diagram-status')
     };
     var defaultQueryText = els.input.value;
     var last = null;
+    var structureGraph = null;
 
     function renderDiagram(statuses) {
+      if (!structureGraph) return; // still loading — loadStructure() re-renders once it lands
       var queryMode = section.classList.contains('mode-query');
-      window.DOIForceGraph.render(els.graph, diagramProps(uc, statuses, queryMode));
+      var statusByKey = {};
+      (statuses || []).forEach(function (s) { statusByKey[s.key] = s; });
+      var nodes = structureGraph.nodes.map(function (n) {
+        var s = statusByKey[n.id];
+        return { id: n.id, label: n.label, name: n.name, status: s ? s.status : undefined };
+      });
+      window.DOIForceGraph.render(els.graph, {
+        nodes: nodes, links: structureGraph.links,
+        mode: queryMode ? 'query' : 'full', height: 520
+      });
+    }
+
+    async function loadStructure() {
+      try {
+        structureGraph = await buildStructureGraph(uc);
+        els.diagramStatus.textContent = structureGraph.nodes.length + ' nodes, ' +
+          structureGraph.links.length + ' edges (RUNS_AS + CAN_READ) — drag to rearrange, hover for details.';
+        renderDiagram(last ? last.statuses : null);
+      } catch (err) {
+        els.diagramStatus.textContent = 'Failed to load the graph structure: ' + err.message;
+      }
     }
 
     function renderFull() {
@@ -995,20 +959,10 @@ RETURN r, role, g.action, d</textarea>
       els.run.textContent = 'Running…';
       try {
         var dsl = els.input.value;
-        var ctx = { primaryRows: await postQuery(dsl), reachRows: null, pathRows: null };
-
-        // Best-effort context queries: the primary result stands on its
-        // own if either of these fails.
-        var relaxed = withoutWhere(dsl);
-        if (relaxed) {
-          try { ctx.reachRows = await postQuery(relaxed); } catch (e) { ctx.reachRows = null; }
-        }
-        if (uc.pathQuery) {
-          try { ctx.pathRows = await postQuery(uc.pathQuery); } catch (e) { ctx.pathRows = null; }
-        }
+        var ctx = { primaryRows: await postQuery(dsl) };
 
         els.error.hidden = true;
-        var statuses = computeStatuses(uc, ctx);
+        var statuses = computeStatuses(ctx.primaryRows);
         last = { statuses: statuses, ctx: ctx };
         renderDiagram(statuses);
         els.status.textContent = ctx.primaryRows.length + ' row' +
@@ -1034,7 +988,7 @@ RETURN r, role, g.action, d</textarea>
       runQuery(true);
     });
 
-    renderDiagram(null);
+    loadStructure();
     renderFull();
   }
 

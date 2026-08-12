@@ -102,29 +102,131 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //   - i-checkout-api-2: same CVE, same role, NOT exposed      -> rejected by WHERE
     //   - rds-orders-db:    exposed, but its role reaches nothing sensitive
     //                                                             -> never reached by the pattern
-    let resources: [(i64, &str, &str, &str, bool, i64); 7] = [
-        (2, "vpc-prod", "vpc", "us-east-1", false, 0),
-        (3, "subnet-prod-a", "subnet", "us-east-1", false, 0),
-        (4, "i-checkout-api-1", "ec2_instance", "us-east-1", true, 94),
+    let mut resources: Vec<(i64, String, &str, &str, bool, i64)> = vec![
+        (2, "vpc-prod".to_string(), "vpc", "us-east-1", false, 0),
+        (
+            3,
+            "subnet-prod-a".to_string(),
+            "subnet",
+            "us-east-1",
+            false,
+            0,
+        ),
+        (
+            4,
+            "i-checkout-api-1".to_string(),
+            "ec2_instance",
+            "us-east-1",
+            true,
+            94,
+        ),
         (
             5,
-            "i-checkout-api-2",
+            "i-checkout-api-2".to_string(),
             "ec2_instance",
             "us-east-1",
             false,
             94,
         ),
-        (6, "vol-checkout-api-1", "ebs_volume", "us-east-1", false, 0),
+        (
+            6,
+            "vol-checkout-api-1".to_string(),
+            "ebs_volume",
+            "us-east-1",
+            false,
+            0,
+        ),
         (
             7,
-            "snap-checkout-api-1",
+            "snap-checkout-api-1".to_string(),
             "ebs_snapshot",
             "us-east-1",
             false,
             0,
         ),
-        (8, "rds-orders-db", "rds_instance", "us-east-1", true, 21),
+        (
+            8,
+            "rds-orders-db".to_string(),
+            "rds_instance",
+            "us-east-1",
+            true,
+            21,
+        ),
     ];
+
+    // Scale the fleet to ~1000 nodes total so the "unused permissions" tab
+    // has enough workloads to be worth rendering as a graph rather than a
+    // hand-drawn 4-box diagram (viewer/force-graph-widget-src/entry.js).
+    // `ROLE_GROUPS` is also where `can_read`/`accessed` below source their
+    // per-role workload counts and IDs from — one source of truth, so the
+    // three tables can't drift out of sync with each other.
+    //
+    // Four of the ten roles can read a PII store; the other six can't
+    // reach anything sensitive at all, same shape as the original
+    // fixture's role-deploy/role-rds-monitor decoys, just replicated
+    // across many more workloads instead of two.
+    let role_groups: [(i64, &str, usize, bool); 10] = [
+        (201, "i-checkout-api", 393, true), // continues from the 2 hand-crafted -1/-2
+        (203, "i-data-admin", 200, true),
+        (205, "i-analytics", 150, true),
+        (206, "i-batch-etl", 150, true),
+        (202, "i-deploy", 12, false),
+        (204, "i-rds-monitor", 12, false),
+        (207, "i-web-frontend", 12, false),
+        (208, "i-support-tools", 13, false),
+        (209, "i-ci-runner", 12, false),
+        (210, "i-sandbox", 12, false),
+    ];
+
+    // The one PII store each PII-capable role's own `CAN_READ` grant
+    // targets (matches the `can_read` table below) — kept next to
+    // `role_groups` so a role can't end up generating an `ACCESSED` edge
+    // toward a store it was never granted `CAN_READ` on in the first
+    // place.
+    let pii_store_for_role = |role_id: i64| -> Option<i64> {
+        match role_id {
+            201 => Some(301),
+            203 => Some(301),
+            205 => Some(303),
+            206 => Some(304),
+            _ => None,
+        }
+    };
+
+    let mut next_resource_id: i64 = 10_000;
+    // (resource_id, role_id) for every generated workload — consumed
+    // below by RUNS_AS.
+    let mut generated_workloads: Vec<(i64, i64)> = Vec::new();
+    // (resource_id, store_id) for the generated workloads that DID use
+    // their declared access — consumed below by ACCESSED. Roughly 4 in 5
+    // of each PII-capable group (`i % 5 != 0`); the rest are exactly the
+    // "declared but never used" gap the anti-join surfaces, just at fleet
+    // scale instead of the original fixture's single example.
+    let mut generated_accessed: Vec<(i64, i64)> = Vec::new();
+    for &(role_id, prefix, count, pii_capable) in &role_groups {
+        // i-checkout-api-3.. picks up right after the 2 hand-crafted rows;
+        // every other prefix is entirely new, so it starts at -1.
+        let start = if prefix == "i-checkout-api" { 3 } else { 1 };
+        for i in 0..count {
+            let id = next_resource_id;
+            next_resource_id += 1;
+            resources.push((
+                id,
+                format!("{prefix}-{}", start + i),
+                "ec2_instance",
+                "us-east-1",
+                false,
+                0,
+            ));
+            generated_workloads.push((id, role_id));
+            if pii_capable && i % 5 != 0 {
+                if let Some(store_id) = pii_store_for_role(role_id) {
+                    generated_accessed.push((id, store_id));
+                }
+            }
+        }
+    }
+
     let resource_schema = IcebergSchema::builder()
         .with_schema_id(0)
         .with_fields(vec![
@@ -159,7 +261,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 resources.iter().map(|r| r.0).collect::<Vec<_>>(),
             )),
             Arc::new(StringArray::from(
-                resources.iter().map(|r| r.1).collect::<Vec<_>>(),
+                resources.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(),
             )),
             Arc::new(StringArray::from(
                 resources.iter().map(|r| r.2).collect::<Vec<_>>(),
@@ -229,11 +331,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // Node ids are namespaced by decade (2xx roles, 3xx stores) purely
     // so the demo dataset stays readable; nothing in the engine cares.
-    let roles: [(i64, &str, bool); 4] = [
+    // 4 of these (matched against `role_groups` above by id) can read a
+    // PII store; the other 6 can't reach anything sensitive at all.
+    let roles: [(i64, &str, bool); 10] = [
         (201, "role-checkout-api", false),
         (202, "role-deploy", false),
         (203, "role-data-admin", true),
         (204, "role-rds-monitor", false),
+        (205, "role-analytics", false),
+        (206, "role-batch-etl", false),
+        (207, "role-web-frontend", false),
+        (208, "role-support-tools", false),
+        (209, "role-ci-runner", false),
+        (210, "role-sandbox", false),
     ];
     let role_schema = IcebergSchema::builder()
         .with_schema_id(0)
@@ -276,9 +386,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    let stores: [(i64, &str, &str); 2] = [
+    // 3 pii, 7 internal — a handful of crown jewels among many mundane
+    // buckets, same imbalance a real inventory has.
+    let stores: [(i64, &str, &str); 10] = [
         (301, "s3-customer-exports", "pii"),
         (302, "s3-ops-logs", "internal"),
+        (303, "s3-billing-records", "pii"),
+        (304, "s3-support-tickets", "pii"),
+        (305, "s3-build-artifacts", "internal"),
+        (306, "s3-terraform-state", "internal"),
+        (307, "s3-ci-cache", "internal"),
+        (308, "s3-app-logs", "internal"),
+        (309, "s3-metrics-export", "internal"),
+        (310, "s3-backup-staging", "internal"),
     ];
     let store_schema = IcebergSchema::builder()
         .with_schema_id(0)
@@ -358,13 +478,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // Both checkout instances run as the *same* role — so exposure, not
-    // identity, is what separates them in the attack-path query.
+    // identity, is what separates them in the attack-path query. Every
+    // generated workload (`generated_workloads`) gets one more, at a
+    // disjoint edge-id range so it can never collide with the hand-crafted
+    // ids above.
+    let mut runs_as: Vec<(i64, i64, i64)> = vec![(2000, 4, 201), (2001, 5, 201), (2002, 8, 204)];
+    let mut next_edge_id: i64 = 100_000;
+    for &(resource_id, role_id) in &generated_workloads {
+        runs_as.push((next_edge_id, resource_id, role_id));
+        next_edge_id += 1;
+    }
     write_table(
         &catalog,
         &namespace,
         &edge_table_name(&EdgeType("RUNS_AS".to_string())),
         edge_schema()?,
-        edge_batch(&[(2000, 4, 201), (2001, 5, 201), (2002, 8, 204)])?,
+        edge_batch(&runs_as)?,
     )
     .await?;
 
@@ -391,11 +520,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         IcebergType::Primitive(PrimitiveType::String),
     )
     .into()])?;
-    let can_read: [(i64, i64, i64, &str); 4] = [
+    // Every PII-capable role (see `role_groups` above) gets exactly one
+    // grant onto a PII store — that store is also where its workloads'
+    // `ACCESSED` edges land below, so the anti-join has a single
+    // `g.action`/`a.action` pair to match per role rather than an
+    // ambiguous choice of stores.
+    let can_read: [(i64, i64, i64, &str); 11] = [
         (2005, 203, 301, "s3:GetObject"),
         (2006, 204, 302, "s3:GetObject"),
         (2007, 201, 302, "s3:GetObject"),
         (2008, 201, 301, "s3:GetObject"),
+        (2010, 205, 303, "s3:GetObject"),
+        (2011, 206, 304, "s3:GetObject"),
+        (2012, 202, 305, "s3:GetObject"),
+        (2013, 207, 306, "s3:GetObject"),
+        (2014, 208, 307, "s3:GetObject"),
+        (2015, 209, 308, "s3:GetObject"),
+        (2016, 210, 309, "s3:GetObject"),
     ];
     let can_read_batch = RecordBatch::try_new(
         Arc::new(iceberg::arrow::schema_to_arrow_schema(&can_read_schema)?),
@@ -423,12 +564,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    // Observed access: only i-checkout-api-1 (4) ever actually reads the
-    // PII store #2008 declares it can. i-checkout-api-2 (5) runs as the
-    // same role, holds the same declared grant transitively, and never
-    // does — that gap is exactly what the "unused permissions" tab's
-    // `NOT EXISTS` query surfaces. Timestamp: 2024-07-01, inside the
-    // query's `>= 2024-05-01` trust window.
+    // Observed access: i-checkout-api-1 (4) actually reads the PII store
+    // #2008 declares it can; i-checkout-api-2 (5) runs as the same role,
+    // holds the same declared grant transitively, and never does — that
+    // gap is exactly what the "unused permissions" tab's `NOT EXISTS`
+    // query surfaces. `generated_accessed` extends the same pattern
+    // across the generated fleet. Timestamp: 2024-07-01 throughout,
+    // inside the query's default `>= 2024-05-01` trust window.
+    const ACCESSED_LAST_SEEN: i64 = 1_719_792_000_000_000;
+    let mut accessed_edge_ids: Vec<i64> = vec![2009];
+    let mut accessed_src: Vec<i64> = vec![4];
+    let mut accessed_dst: Vec<i64> = vec![301];
+    for &(resource_id, store_id) in &generated_accessed {
+        accessed_edge_ids.push(next_edge_id);
+        next_edge_id += 1;
+        accessed_src.push(resource_id);
+        accessed_dst.push(store_id);
+    }
+    let accessed_count = accessed_edge_ids.len();
+
     let accessed_schema = edge_schema_with(vec![
         NestedField::required(4, "action", IcebergType::Primitive(PrimitiveType::String)).into(),
         NestedField::required(
@@ -441,11 +595,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let accessed_batch = RecordBatch::try_new(
         Arc::new(iceberg::arrow::schema_to_arrow_schema(&accessed_schema)?),
         vec![
-            Arc::new(Int64Array::from(vec![2009])),
-            Arc::new(Int64Array::from(vec![4])),
-            Arc::new(Int64Array::from(vec![301])),
-            Arc::new(StringArray::from(vec!["s3:GetObject"])),
-            Arc::new(TimestampMicrosecondArray::from(vec![1_719_792_000_000_000])),
+            Arc::new(Int64Array::from(accessed_edge_ids)),
+            Arc::new(Int64Array::from(accessed_src)),
+            Arc::new(Int64Array::from(accessed_dst)),
+            Arc::new(StringArray::from(vec!["s3:GetObject"; accessed_count])),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                ACCESSED_LAST_SEEN;
+                accessed_count
+            ])),
         ],
     )?;
     write_table(

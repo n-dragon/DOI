@@ -6,7 +6,9 @@ the browser. Three tabs:
 - **Unused permissions** — the least-privilege-via-telemetry use case:
   cross-references declared IAM access (`RUNS_AS`/`CAN_READ`) against
   observed access telemetry (`ACCESSED`) via a correlated `NOT EXISTS`
-  anti-join, live against a running coordinator.
+  anti-join, live against a running coordinator. The diagram renders the
+  live coordinator's full ~988-node fleet, fetched on page load — not a
+  handful of hand-positioned boxes.
 - **Architecture** — static reference content (API/storage/index/engine
   choices), no live query surface.
 - **Datadog fleet** — the 1000-node synthetic dataset from
@@ -66,26 +68,25 @@ comes back and shows inline, same as it would from `query-client`.
 
 ### What the highlighting means
 
-Each run issues more than one real query, so the diagram can distinguish
-different reasons a node isn't in your result:
+Binary, at this scale: a node is either in your query's result (red,
+enlarged — an unused permission) or it isn't (dimmed). The small demo's
+finer reached/traversed/filtered-by-`WHERE` distinction doesn't carry to
+~1000 nodes with per-node text budget gone — that detail is still visible
+per-row in the results list and by editing the query, just not drawn as a
+third node color.
 
-| State | Meaning |
-|---|---|
-| purple ring + badge | matched and projected by your `RETURN` |
-| greyed, "reached — filtered out by `WHERE`" | your pattern reached it; the `WHERE` clause rejected it |
-| greyed, "not reached by this pattern" | the traversal never got there at all |
+### The dataset is built to have decoys — a lot of them
 
-The second query is your own pattern re-run with its `WHERE` clause
-stripped, so the diagram can tell those two greyed-out states apart.
-Best-effort — if it fails, the primary result still stands.
-
-### The dataset is built to have a decoy
-
-`i-checkout-api-1` and `i-checkout-api-2` run as the same role and hold
-the same declared `CAN_READ` grant on the PII store — identical on paper.
-Only one of them has an `ACCESSED` edge into that store; the other is the
-finding. A rule-per-resource scanner (or a CSPM that only reads declared
-policy) can't tell them apart — the `NOT EXISTS` anti-join is what does.
+`i-checkout-api-1` and `i-checkout-api-2` were the original pair: same
+role, same declared `CAN_READ` grant on the PII store, only one with an
+`ACCESSED` edge into it. `examples/ingest-cloud-cost/src/main.rs` now
+generates 966 more workloads the same way, across 4 PII-capable roles and
+6 that never reach anything sensitive at all — about 1 in 5 of the
+PII-capable ones (deterministically, `i % 5 == 0` per role group) never
+got an `ACCESSED` edge, so the anti-join's default query returns ~180
+rows. A rule-per-resource scanner (or a CSPM that only reads declared
+policy) can't tell any of them apart from the ~800 that are fine — the
+`NOT EXISTS` anti-join is what does.
 
 The palette is a visual homage to Datadog's brand purple
 (`#632CA6` / `#8000FF`) — chosen because this dataset mirrors Datadog's
@@ -101,12 +102,15 @@ themselves are React; the rest of the page (tabs, query editor, results
 panel) stays vanilla JS/DOM.
 
 **Unused permissions** (2D, `force-graph-widget-src/entry.js` →
-`vendor/force-graph-widget.js`) — custom canvas node/link rendering that
-reproduces this page's status language (included/excluded/dimmed,
-badges, the always-on `ACCESSED` edge), reading colors from the page's
-CSS custom properties so light/dark theming stays centralized in
-`index.html`. Exposes `window.DOIForceGraph.render(container, {nodes,
-links, mode})`. Loaded eagerly (it's the default tab).
+`vendor/force-graph-widget.js`) — small physics-positioned circles,
+colored by node label in full-graph mode or by query match in query-result
+mode (`nodeColor`/`nodeVal`, no custom canvas drawing — that doesn't scale
+to ~1000 nodes), reading colors from the page's CSS custom properties so
+light/dark theming stays centralized in `index.html`. Exposes
+`window.DOIForceGraph.render(container, {nodes, links, mode})`; `index.html`
+fetches the actual `{nodes, links}` from the live coordinator
+(`buildStructureGraph()`) rather than shipping a static layout. Loaded
+eagerly (it's the default tab).
 
 **Datadog fleet** (3D, `force-graph-widget-src/entry-3d.js` →
 `vendor/force-graph-3d-widget.js`) — deliberately the opposite approach:
