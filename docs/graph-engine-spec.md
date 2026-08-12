@@ -400,32 +400,129 @@ actées (§4.3, §5.3).
 
 ### 7.1 Langage de requête (DSL)
 
-- DSL de traversal inspiré de **Cypher/Gremlin**, sous-ensemble initial
-  centré sur les deux opérations prioritaires actées :
-  - **Voisinage k-hop filtré** :
-    ```
-    MATCH (p:Person {name: "Alice"})-[:KNOWS*1..3]->(friend:Person)
-    WHERE friend.birth_year > 1990
-    RETURN friend
-    ```
-  - **Pattern matching (sous-graphes)** :
-    ```
-    MATCH (p:Person)-[:WORKS_AT]->(o:Organization)<-[:WORKS_AT]-(colleague:Person)
-    WHERE p.name = "Alice" AND colleague <> p
-    RETURN colleague, o
-    ```
-- Hors scope v1 (noté explicitement, cf. §1.4 et §12) : `shortest path`,
-  algorithmes analytiques globaux.
-- **Pas d'agrégation** : le DSL ne comporte volontairement **aucune**
-  fonction d'agrégation (`COUNT`, `SUM`, `AVG`, `MIN`/`MAX`, `COLLECT`) ni
-  clause `GROUP BY`. `RETURN` ne fait que **projeter** les nœuds/arêtes/
-  propriétés matchés par le `MATCH`, sans les réduire ni les regrouper —
-  décision actée (§1.4), pas un TBD. Un besoin d'agrégation se traite en
-  aval de la réponse streamée du moteur (§7.5), côté client ou via un
-  moteur externe (DataFusion/Spark) sur les résultats bruts exportés.
-- Grammaire formelle complète, gestion des alias, clauses `ORDER BY` /
-  `LIMIT` / pagination des résultats : **TBD**, à détailler dans une
-  spec de langage dédiée avant implémentation du parser.
+DSL de traversal inspiré de **Cypher/Gremlin**, une requête a toujours la
+forme `MATCH <motif> [WHERE <conditions>] RETURN <projection>` — pas
+d'autre clause de tête. Grammaire formelle : `graph-dsl/src/dsl.pest`
+(implémentation `pest`), ce qui suit en est la description narrative.
+
+**Motif (`MATCH`).** Une chaîne alternant nœuds et arêtes :
+`(alias[:Label] [{prop: littéral, ...}]) -[...]-> (alias[:Label] ...) ...`
+
+- **Nœud** : `(alias:Label {propriété: littéral, ...})` — le label et le
+  bloc de propriétés sont optionnels ; un nœud sans label ni propriétés
+  (`(w)`) est une simple *référence* à un alias déjà lié ailleurs dans la
+  requête (utilisé par `NOT EXISTS`, voir plus bas), pas une nouvelle
+  liaison. Le bloc de propriétés n'accepte que des filtres d'égalité
+  (`{name: "Alice"}`) — un filtre d'inégalité/plage sur le nœud de départ
+  se fait via `WHERE` (voir plus bas), pas dans le motif lui-même.
+- **Arête** : `-[alias?:TYPE? hop_range?]->` (sortante) ou
+  `<-[...]-` (entrante) — type et alias sont chacun optionnels, une
+  arête sans type (`-->`) matche tout type de relation. `hop_range`
+  (`*min..max`, ex. `*1..3`) rend le hop variable ; absent, un hop est
+  toujours simple (min = max = 1).
+  - **Alias d'arête** (`[g:GRANTS]`) : lie l'instance d'arête traversée
+    (pas seulement ses deux extrémités), pour la référencer ensuite dans
+    `WHERE`/`RETURN` (`g.action`). Restreint aux hops à cardinalité fixe
+    (`hop_range` absent ou `*1..1`) — quelle arête d'une chaîne `*1..3`
+    un alias désignerait-il ? Rejeté par le validateur avec un message
+    dédié (`EdgeAliasOnVariableLengthHop`), pas par un échec de parsing
+    générique.
+
+**Conditions (`WHERE`)**, une conjonction (`AND`) de :
+- **Filtre de propriété** — `alias.propriété OP littéral`
+  (`friend.birth_year > 1990`). `OP` ∈ `= <> < <= > >=` ; les opérateurs
+  d'ordre ne sont valides que sur `Int64`/`Float64`/`Timestamp` (§3.2,
+  vérifié par le validateur, §7.2). Un littéral `String` comparé à une
+  propriété `Timestamp` est interprété comme un horodatage RFC3339
+  (`a.last_seen >= "2024-05-01T00:00:00Z"`) — décision délibérée plutôt
+  que d'ajouter une fonction `datetime()`/`duration()` au langage pour un
+  seul point d'usage (voir plus bas, "hors scope").
+- **Comparaison d'alias** — `alias OP alias` (`colleague <> p`) : compare
+  deux alias *entiers* liés par le motif pour (in)égalité de nœud, pas
+  une propriété.
+- **Comparaison propriété-propriété** — `alias.propriété OP
+  alias.propriété` (`a.action = g.action`) : compare la propriété de deux
+  alias liés (nœud ou arête indifféremment) entre eux, plutôt que contre
+  un littéral. À distinguer des deux formes précédentes malgré une
+  syntaxe proche — la présence du `.` de chaque côté du `OP` fait foi.
+- **`NOT EXISTS { MATCH ... [WHERE ...] }`** — vérification d'existence
+  corrélée : le motif interne ne peut que *référencer* des alias déjà
+  liés par le `MATCH` externe (nœuds sans label/propriétés, comme `(w)`
+  ci-dessous) et décrire **exactement un hop sortant** de plus depuis
+  là :
+  ```
+  NOT EXISTS {
+    MATCH (w)-[a:ACCESSED]->(d)
+    WHERE a.action = g.action AND a.last_seen >= "2024-05-01T00:00:00Z"
+  }
+  ```
+  Ni un second motif indépendant, ni une sous-requête générale : la
+  portée est intentionnellement celle d'une anti-jointure corrélée à un
+  hop, pas un langage de sous-requêtes. Un hop **entrant** ou un
+  `NOT EXISTS` imbriqué dans un autre sont syntaxiquement acceptés par la
+  grammaire mais rejetés par le validateur (`NotExistsMustBeOutgoing`,
+  `NestedNotExists`) — voir §7.2 et `ARCHITECTURE.md` §6 pour la
+  justification (placement physique d'une arête par sa partition
+  source).
+
+**Projection (`RETURN`)**, une liste de :
+- `alias` — projette l'enregistrement complet du nœud (ou de l'arête)
+  lié par cet alias.
+- `alias.propriété` — projette une seule propriété scalaire de cet alias
+  (nœud ou arête).
+
+Les deux formes sont mélangeables dans la même clause
+(`RETURN w.service, w.team, r.arn, g.action, d.arn`).
+
+**Deux exemples des opérations prioritaires actées** (§1.1) :
+
+- **Voisinage k-hop filtré** :
+  ```
+  MATCH (p:Person {name: "Alice"})-[:KNOWS*1..3]->(friend:Person)
+  WHERE friend.birth_year > 1990
+  RETURN friend
+  ```
+- **Pattern matching (sous-graphes)** :
+  ```
+  MATCH (p:Person)-[:WORKS_AT]->(o:Organization)<-[:WORKS_AT]-(colleague:Person)
+  WHERE p.name = "Alice" AND colleague <> p
+  RETURN colleague, o
+  ```
+
+**Un troisième exemple**, motivant à lui seul l'alias d'arête, la
+comparaison propriété-propriété et `NOT EXISTS` (use case moindre
+privilège prouvé par la télémétrie, `schema/least_privilege.graphidl`,
+détail complet dans `TASKS.md`/`ARCHITECTURE.md` §6 du dépôt
+`graph-engine`) :
+```
+MATCH (w:Workload)-[:ASSUMES]->(r:IAMRole)-[g:GRANTS]->(d:DataStore)
+WHERE d.data_class = "sensitive"
+  AND NOT EXISTS {
+    MATCH (w)-[a:ACCESSED]->(d)
+    WHERE a.action = g.action AND a.last_seen >= "2024-05-01T00:00:00Z"
+  }
+RETURN w.workload_id, w.team, r.arn, g.action, d.arn
+```
+
+Hors scope v1 (noté explicitement, cf. §1.4 et §12) : `shortest path`,
+algorithmes analytiques globaux.
+
+**Pas d'agrégation** : le DSL ne comporte volontairement **aucune**
+fonction d'agrégation (`COUNT`, `SUM`, `AVG`, `MIN`/`MAX`, `COLLECT`) ni
+clause `GROUP BY`. `RETURN` ne fait que **projeter** les nœuds/arêtes/
+propriétés matchés par le `MATCH`, sans les réduire ni les regrouper —
+décision actée (§1.4), pas un TBD. Un besoin d'agrégation se traite en
+aval de la réponse streamée du moteur (§7.5), côté client ou via un
+moteur externe (DataFusion/Spark) sur les résultats bruts exportés.
+
+**Encore hors scope, `TBD`** : `ORDER BY`/`LIMIT`/pagination des
+résultats ; `OR` dans `WHERE` (seule la conjonction `AND` existe) ; un
+alias d'arête sur un hop à cardinalité variable ; un `NOT EXISTS` imbriqué
+ou à plus d'un hop ; un langage d'expressions dédié aux dates
+(`datetime()`/`duration()` — la coercion RFC3339 ci-dessus couvre le seul
+besoin rencontré à ce jour, pas un cas général). À détailler dans une
+spec de langage dédiée si un nouveau use case en a besoin, plutôt
+qu'anticipé ici.
 
 ### 7.2 Validation statique
 
