@@ -1,15 +1,26 @@
-// One inventory, two lenses. `Resource` is deliberately shared between
-// both use cases the viewer exposes as tabs:
+// One inventory, three lenses. `Resource` is deliberately shared between
+// all three use cases the viewer exposes as tabs:
 //
-//   - FinOps    — CloudAccount -OWNS-> Resource -CONTAINS*-> Resource
-//                 -HAS_COST-> CostRecord
-//   - Security  — Resource -RUNS_AS-> IAMRole -CAN_ASSUME*-> IAMRole
-//                 -CAN_READ-> DataStore
+//   - FinOps       — CloudAccount -OWNS-> Resource -CONTAINS*-> Resource
+//                     -HAS_COST-> CostRecord
+//   - Attack paths — Resource -RUNS_AS-> IAMRole -CAN_ASSUME*-> IAMRole
+//                     -CAN_READ-> DataStore
+//   - Unused perms — Resource -RUNS_AS-> IAMRole -CAN_READ-> DataStore,
+//                     cross-referenced against Resource -ACCESSED->
+//                     DataStore (telemetry) via a correlated NOT EXISTS —
+//                     the same "declared vs. observed" shape as
+//                     `schema/least_privilege.graphidl`, folded into this
+//                     shared inventory instead of a separate dataset so
+//                     the viewer can run it against the one coordinator
+//                     the other two tabs already use. `CAN_READ` here
+//                     plays `GRANTS`'s role (`action` added below);
+//                     `ACCESSED` is new.
 //
 // That sharing is the point: the same node the billing pipeline knows as
 // a line item is the one the security posture scanner knows as an
-// attack-path hop. Joining them is an edge in the graph, not a runtime
-// join between two systems.
+// attack-path hop, and the one the access-telemetry feed knows as an
+// actor. Joining them is an edge in the graph, not a runtime join
+// between two systems.
 //
 // Properties filtered on in a `WHERE` must be `@indexed` — the executor
 // resolves filters through the property index (spec §5.2), which only
@@ -87,8 +98,26 @@ schema graph_v1 {
     to: IAMRole
   }
 
+  // Doubles as the "unused permissions" tab's declared-access edge
+  // (`GRANTS` in `schema/least_privilege.graphidl`'s terms) — `action`
+  // is what a `NOT EXISTS { ... a.action = g.action ... }` anti-join
+  // matches against `ACCESSED.action` below.
   edge CAN_READ {
     from: IAMRole
     to: DataStore
+    action: String
+  }
+
+  // Observed access (telemetry), Resource -> DataStore directly — the
+  // *workload* is the actor, the role is only the vehicle, same
+  // structuring decision as `least_privilege.graphidl`'s `ACCESSED`.
+  // Cross-referencing this against `CAN_READ` is what turns "this role
+  // can read the PII store" into "this specific instance never actually
+  // did".
+  edge ACCESSED {
+    from: Resource
+    to: DataStore
+    action: String
+    last_seen: Timestamp
   }
 }

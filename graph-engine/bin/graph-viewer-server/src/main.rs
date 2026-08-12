@@ -21,7 +21,7 @@ use axum::Router;
 use futures::StreamExt;
 use graph_proto::v1::graph_service_client::GraphServiceClient;
 use graph_proto::v1::value::Kind as ValueKind;
-use graph_proto::v1::{ExecuteQueryRequest, NodeProperties, Value as ProtoValue};
+use graph_proto::v1::{EdgeProperties, ExecuteQueryRequest, NodeProperties, Value as ProtoValue};
 use serde::Deserialize;
 use serde_json::{json, Map, Value as JsonValue};
 use std::net::SocketAddr;
@@ -91,11 +91,22 @@ enum QueryError {
 }
 
 /// Runs `dsl` against the coordinator's real `ExecuteQuery` RPC and
-/// reshapes each streamed `QueryResult` into one JSON row: `{alias:
-/// {label, properties: {...}}}`, falling back to `{alias: {node_id}}` for
-/// the (normal-path-unreachable in this dataset, but not impossible)
-/// case where a matched node's properties didn't come back from
-/// `GetNodeProperties` — e.g. a rebuild swapped generations mid-query.
+/// reshapes each streamed `QueryResult` into one JSON row. Three shapes
+/// per projection key, matching what `graph-coordinator` puts on the
+/// wire (see `service.rs`'s doc comment on `alias_is_edge`):
+/// - `alias` (bare node alias) -> `{label, properties: {...}}`, hydrated
+///   from `result.properties`.
+/// - `alias` (bare edge alias, e.g. the least-privilege use case's `g`)
+///   -> `{edge_type, properties: {...}}`, hydrated from
+///   `result.edge_properties`.
+/// - `"alias.property"` (a `RETURN alias.property` item) -> the scalar
+///   value directly — `result.projection`'s `Value` already *is* the
+///   final answer here, not a NodeId/EdgeId left to hydrate further.
+///
+/// Falls back to `{node_id: ...}` only for a bare alias whose properties
+/// didn't come back from `GetNodeProperties`/`GetEdgeProperties` (normal-
+/// path-unreachable in this dataset, but not impossible — e.g. a rebuild
+/// swapped generations mid-query).
 async fn execute(addr: &str, dsl: &str) -> Result<Vec<JsonValue>, QueryError> {
     let mut client = GraphServiceClient::connect(addr.to_string())
         .await
@@ -115,9 +126,14 @@ async fn execute(addr: &str, dsl: &str) -> Result<Vec<JsonValue>, QueryError> {
 
         let mut row = Map::new();
         for (alias, value) in &result.projection {
-            let entry = match result.properties.get(alias) {
-                Some(props) => node_properties_to_json(props),
-                None => json!({ "node_id": value_to_json(value) }),
+            let entry = if alias.contains('.') {
+                value_to_json(value)
+            } else if let Some(props) = result.properties.get(alias) {
+                node_properties_to_json(props)
+            } else if let Some(props) = result.edge_properties.get(alias) {
+                edge_properties_to_json(props)
+            } else {
+                json!({ "node_id": value_to_json(value) })
             };
             row.insert(alias.clone(), entry);
         }
@@ -133,6 +149,14 @@ fn node_properties_to_json(props: &NodeProperties) -> JsonValue {
         fields.insert(name.clone(), value_to_json(value));
     }
     json!({ "label": props.label, "properties": fields })
+}
+
+fn edge_properties_to_json(props: &EdgeProperties) -> JsonValue {
+    let mut fields = Map::new();
+    for (name, value) in &props.fields {
+        fields.insert(name.clone(), value_to_json(value));
+    }
+    json!({ "edge_type": props.edge_type, "properties": fields })
 }
 
 fn value_to_json(value: &ProtoValue) -> JsonValue {

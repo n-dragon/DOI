@@ -17,7 +17,7 @@
 //! `GRAPH_NAMESPACE` env vars with matching defaults, so pointing them at
 //! the same catalog needs no extra configuration in the common case.
 
-use arrow_array::{BooleanArray, Int64Array, RecordBatch, StringArray};
+use arrow_array::{BooleanArray, Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray};
 use graph_schema::{EdgeType, Label};
 use graph_storage::{edge_table_name, node_table_name, open_sql_catalog};
 use iceberg::spec::{NestedField, PrimitiveType, Schema as IcebergSchema, Type as IcebergType};
@@ -381,17 +381,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // role-checkout-api reads ops-logs directly — a CAN_READ edge that
     // leads nowhere sensitive, so "has a CAN_READ edge" is not by itself
-    // the finding.
+    // the finding. #2008 (role-checkout-api -> the PII store) is the
+    // grant the "unused permissions" tab's query cross-references
+    // against `ACCESSED` below — `action` carries the concrete IAM
+    // action so the anti-join has something to match on.
+    let can_read_schema = edge_schema_with(vec![NestedField::required(
+        4,
+        "action",
+        IcebergType::Primitive(PrimitiveType::String),
+    )
+    .into()])?;
+    let can_read: [(i64, i64, i64, &str); 4] = [
+        (2005, 203, 301, "s3:GetObject"),
+        (2006, 204, 302, "s3:GetObject"),
+        (2007, 201, 302, "s3:GetObject"),
+        (2008, 201, 301, "s3:GetObject"),
+    ];
+    let can_read_batch = RecordBatch::try_new(
+        Arc::new(iceberg::arrow::schema_to_arrow_schema(&can_read_schema)?),
+        vec![
+            Arc::new(Int64Array::from(
+                can_read.iter().map(|e| e.0).collect::<Vec<_>>(),
+            )),
+            Arc::new(Int64Array::from(
+                can_read.iter().map(|e| e.1).collect::<Vec<_>>(),
+            )),
+            Arc::new(Int64Array::from(
+                can_read.iter().map(|e| e.2).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                can_read.iter().map(|e| e.3).collect::<Vec<_>>(),
+            )),
+        ],
+    )?;
     write_table(
         &catalog,
         &namespace,
         &edge_table_name(&EdgeType("CAN_READ".to_string())),
-        edge_schema()?,
-        edge_batch(&[(2005, 203, 301), (2006, 204, 302), (2007, 201, 302)])?,
+        can_read_schema,
+        can_read_batch,
     )
     .await?;
 
-    println!("Done: 5 node tables, 6 edge tables committed.");
+    // Observed access: only i-checkout-api-1 (4) ever actually reads the
+    // PII store #2008 declares it can. i-checkout-api-2 (5) runs as the
+    // same role, holds the same declared grant transitively, and never
+    // does — that gap is exactly what the "unused permissions" tab's
+    // `NOT EXISTS` query surfaces. Timestamp: 2024-07-01, inside the
+    // query's `>= 2024-05-01` trust window.
+    let accessed_schema = edge_schema_with(vec![
+        NestedField::required(4, "action", IcebergType::Primitive(PrimitiveType::String)).into(),
+        NestedField::required(
+            5,
+            "last_seen",
+            IcebergType::Primitive(PrimitiveType::Timestamp),
+        )
+        .into(),
+    ])?;
+    let accessed_batch = RecordBatch::try_new(
+        Arc::new(iceberg::arrow::schema_to_arrow_schema(&accessed_schema)?),
+        vec![
+            Arc::new(Int64Array::from(vec![2009])),
+            Arc::new(Int64Array::from(vec![4])),
+            Arc::new(Int64Array::from(vec![301])),
+            Arc::new(StringArray::from(vec!["s3:GetObject"])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1_719_792_000_000_000])),
+        ],
+    )?;
+    write_table(
+        &catalog,
+        &namespace,
+        &edge_table_name(&EdgeType("ACCESSED".to_string())),
+        accessed_schema,
+        accessed_batch,
+    )
+    .await?;
+
+    println!("Done: 5 node tables, 8 edge tables committed.");
     Ok(())
 }
 
@@ -413,6 +479,32 @@ fn edge_schema() -> iceberg::Result<IcebergSchema> {
             )
             .into(),
         ])
+        .build()
+}
+
+/// `edge_schema()` plus extra property columns, for edge tables that
+/// carry more than bare `(edge_id, src, dst)` — `CAN_READ.action` and
+/// `ACCESSED.{action,last_seen}` below.
+fn edge_schema_with(extra_fields: Vec<Arc<NestedField>>) -> Result<IcebergSchema, iceberg::Error> {
+    let mut fields = vec![
+        NestedField::required(1, "edge_id", IcebergType::Primitive(PrimitiveType::Long)).into(),
+        NestedField::required(
+            2,
+            "src_node_id",
+            IcebergType::Primitive(PrimitiveType::Long),
+        )
+        .into(),
+        NestedField::required(
+            3,
+            "dst_node_id",
+            IcebergType::Primitive(PrimitiveType::Long),
+        )
+        .into(),
+    ];
+    fields.extend(extra_fields);
+    IcebergSchema::builder()
+        .with_schema_id(0)
+        .with_fields(fields)
         .build()
 }
 

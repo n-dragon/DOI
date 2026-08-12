@@ -289,6 +289,21 @@
     stroke-dasharray: 3 4;
   }
 
+  /* Observed access (ACCESSED) — deliberately outside the query-mode
+     in-range/out-of-range toggle (`applyToSvg`'s `endpoints` rule):
+     it's ground truth about the dataset, not something a query result
+     lights up or dims, so it stays the same in both diagram modes. */
+  .edge--accessed {
+    fill: none;
+    stroke: var(--node-rds);
+    stroke-width: 2;
+  }
+  .edge--accessed-label {
+    font-size: 10px;
+    fill: var(--node-rds);
+    font-weight: 600;
+  }
+
   .node rect {
     stroke-width: 1.6;
     transition: fill 0.15s ease, stroke 0.15s ease, opacity 0.15s ease;
@@ -505,6 +520,10 @@
     <button type="button" role="tab" data-tab="security" aria-selected="false" aria-controls="panel-security" id="tab-security" tabindex="-1">
       Attack paths
       <span class="tab-sub">can the internet reach our PII?</span>
+    </button>
+    <button type="button" role="tab" data-tab="unused" aria-selected="false" aria-controls="panel-unused" id="tab-unused" tabindex="-1">
+      Unused permissions
+      <span class="tab-sub">which grants were never used?</span>
     </button>
   </div>
 
@@ -889,6 +908,146 @@ RETURN r, entry, admin, d</textarea>
     </div>
   </section>
 
+  <section class="usecase" data-usecase="unused" id="panel-unused" role="tabpanel" aria-labelledby="tab-unused" hidden>
+    <p class="usecase-lede">
+      A CSPM tells you a role <em>can</em> read the PII store. It cannot tell you whether it
+      <em>ever has</em> — that requires a second, independently-collected fact: access telemetry,
+      joined against the declared grant. <code class="mono">i-checkout-api-1</code> and
+      <code class="mono">i-checkout-api-2</code> are the identical twins from the Attack paths tab,
+      same role, same declared reach — but only one of them has ever actually touched the store.
+      Declared access with no matching observed access, inside a trust window, is the finding.
+      That cross-reference is exactly what edge aliases and a correlated
+      <code class="mono">NOT EXISTS</code> were added to this DSL for.
+    </p>
+    <div class="layout">
+      <div class="main-col">
+    <div class="card diagram-card">
+      <div class="diagram-toolbar">
+        <span class="diagram-title">prod-aws · declared grant vs. observed access</span>
+        <div class="toggle" role="group" aria-label="Diagram mode">
+          <button type="button" data-role="btn-full" aria-pressed="true">full graph</button>
+          <button type="button" data-role="btn-query" aria-pressed="false">query result</button>
+        </div>
+      </div>
+
+      <svg class="graph" viewBox="0 0 900 380" role="img" aria-label="Graph of two identical workloads that both declare the same permission to read a PII store, with access telemetry showing only one of them ever used it — the current query's finding highlighted in query mode.">
+        <defs>
+          <marker id="arrow-unused" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L8,4 L0,8 z" fill="var(--ink-faint)"></path>
+          </marker>
+          <marker id="arrow-accessed" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L8,4 L0,8 z" fill="var(--node-rds)"></path>
+          </marker>
+        </defs>
+
+        <text x="110" y="30" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">workloads</text>
+        <text x="450" y="30" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">runs as</text>
+        <text x="780" y="30" text-anchor="middle" class="mono" font-size="11" fill="var(--ink-faint)">declared read access</text>
+
+        <!-- RUNS_AS -->
+        <g>
+          <line class="edge" data-from="i1" data-to="role" marker-end="url(#arrow-unused)" x1="210" y1="90" x2="350" y2="176"></line>
+          <line class="edge" data-from="i2" data-to="role" marker-end="url(#arrow-unused)" x1="210" y1="290" x2="350" y2="204"></line>
+        </g>
+
+        <!-- CAN_READ (declared) -->
+        <g>
+          <line class="edge edge--cost" data-from="role" data-to="store" marker-end="url(#arrow-unused)" x1="550" y1="190" x2="680" y2="190"></line>
+        </g>
+
+        <!-- ACCESSED (observed telemetry) — always drawn, not toggled by
+             query mode: it's ground truth about the dataset, and it's
+             the proof, not a query result in its own right. -->
+        <g>
+          <line class="edge--accessed" marker-end="url(#arrow-accessed)" x1="205" y1="68" x2="690" y2="172"></line>
+          <text class="edge--accessed-label mono" x="430" y="105" text-anchor="middle">ACCESSED · s3:GetObject · 2024-07-01</text>
+        </g>
+
+        <!-- workloads -->
+        <g class="node" data-id="i1" data-node-key="Resource:i-checkout-api-1" data-status="excluded">
+          <rect x="10" y="54" width="200" height="56" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
+          <text class="label" x="110" y="76" text-anchor="middle">i-checkout-api-1</text>
+          <text class="sub mono" x="110" y="91" text-anchor="middle">Resource · ec2_instance</text>
+          <text class="why" x="110" y="126" text-anchor="middle"></text>
+          <text class="badge mono" x="110" y="126" text-anchor="middle" fill="var(--danger)"></text>
+          <title>Resource · i-checkout-api-1 · has an ACCESSED edge into the PII store, 2024-07-01 — the permission is in use</title>
+        </g>
+
+        <g class="node" data-id="i2" data-node-key="Resource:i-checkout-api-2" data-status="included">
+          <rect x="10" y="270" width="200" height="56" rx="8" fill="var(--node-compute)" stroke="var(--node-compute)"></rect>
+          <text class="label" x="110" y="292" text-anchor="middle">i-checkout-api-2</text>
+          <text class="sub mono" x="110" y="307" text-anchor="middle">Resource · ec2_instance</text>
+          <text class="why" x="110" y="342" text-anchor="middle"></text>
+          <text class="badge mono" x="110" y="342" text-anchor="middle" fill="var(--danger)"></text>
+          <title>Resource · i-checkout-api-2 · same role, same declared grant, no ACCESSED edge at all — never used it</title>
+        </g>
+
+        <!-- role -->
+        <g class="node" data-id="role" data-node-key="IAMRole:role-checkout-api" data-status="included">
+          <rect x="350" y="162" width="200" height="56" rx="8" fill="var(--node-role)" stroke="var(--node-role)"></rect>
+          <text class="label" x="450" y="184" text-anchor="middle">role-checkout-api</text>
+          <text class="sub mono" x="450" y="199" text-anchor="middle">IAMRole · not admin</text>
+          <text class="why" x="450" y="234" text-anchor="middle"></text>
+          <text class="badge mono" x="450" y="234" text-anchor="middle" fill="var(--danger)"></text>
+          <title>IAMRole · role-checkout-api · declares s3:GetObject on the PII store, action shared verbatim with ACCESSED.action</title>
+        </g>
+
+        <!-- store -->
+        <g class="node" data-id="store" data-node-key="DataStore:s3-customer-exports" data-status="included">
+          <rect x="680" y="162" width="200" height="56" rx="8" fill="var(--node-store)" stroke="var(--danger)" stroke-width="2.5"></rect>
+          <text class="label" x="780" y="184" text-anchor="middle">s3-customer-exports</text>
+          <text class="sub mono" x="780" y="199" text-anchor="middle">DataStore · pii</text>
+          <text class="why" x="780" y="234" text-anchor="middle"></text>
+          <text class="badge mono" x="780" y="234" text-anchor="middle" fill="var(--danger)"></text>
+          <title>DataStore · s3-customer-exports · classification pii — the same crown jewels the Attack paths tab anchors on</title>
+        </g>
+      </svg>
+      <figcaption style="padding: 4px 4px 16px; font-size: 12px; color: var(--ink-faint);">
+        Solid arrow: <code class="mono">RUNS_AS</code>. Dashed: <code class="mono">CAN_READ</code>, the declared grant. Teal: <code class="mono">ACCESSED</code>, observed telemetry — drawn once, because only one workload has one. Hover any node for its properties.
+      </figcaption>
+    </div>
+    <div class="card panel">
+      <h2>Why this needed a DSL extension</h2>
+      <p class="empty-hint">v1 had no way to bind the specific <code class="mono">CAN_READ</code> edge traversed (<code class="mono">[g:CAN_READ]</code>), no way to compare one alias's property against another's (<code class="mono">a.action = g.action</code>), and no way to ask a graph "does this <em>not</em> exist" at all. Computing this finding used to mean exporting both edge sets and diffing them downstream. Now it's one query, run in-engine, streamed like any other.</p>
+    </div>
+    </div>
+
+    <div class="side">
+      <div class="card panel">
+        <div class="panel-head">
+          <h2>Query</h2>
+          <span class="panel-head-hint">edit &amp; run</span>
+        </div>
+        <textarea data-role="query-input" class="query-editor mono" spellcheck="false" autocomplete="off" rows="12">MATCH (r:Resource)-[:RUNS_AS]->(role:IAMRole)-[g:CAN_READ]->(d:DataStore)
+WHERE d.classification = "pii"
+  AND NOT EXISTS {
+    MATCH (r)-[a:ACCESSED]->(d)
+    WHERE a.action = g.action AND a.last_seen &gt;= "2024-05-01T00:00:00Z"
+  }
+RETURN r, role, g.action, d</textarea>
+        <div class="query-actions">
+          <button type="button" data-role="btn-run" class="btn btn-primary">Run query</button>
+          <button type="button" data-role="btn-reset" class="btn btn-ghost">Reset</button>
+        </div>
+        <p class="query-error" data-role="query-error" role="alert" hidden></p>
+        <p class="empty-hint" data-role="query-status" style="margin-top:10px;">Two real round trips: your query, and the same pattern without <code class="mono">WHERE</code> (to tell &ldquo;declared, and used&rdquo; from &ldquo;never declared at all&rdquo;). <code class="mono">g.action</code> and the rest of <code class="mono">RETURN</code> are projected straight off the wire — no re-implemented traversal in this browser.</p>
+      </div>
+
+      <div class="card panel">
+        <h2 data-role="results-title">Dataset</h2>
+        <div data-role="results-body"></div>
+      </div>
+
+      <div class="card panel">
+        <h2>Node types</h2>
+        <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-role)"></span><span class="name">IAMRole</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store); border:1.5px solid var(--danger)"></span><span class="name">DataStore · pii</span></div><div class="legend-row"><span class="swatch" style="background:transparent; border:2px solid var(--node-rds)"></span><span class="name">observed access (ACCESSED)</span></div></div>
+        <p class="empty-hint" style="margin-top:10px;">Same <code class="mono">Resource</code>/<code class="mono">IAMRole</code>/<code class="mono">DataStore</code> labels as the other two tabs — a third feed (access telemetry) joined onto the same inventory by an edge, not a fourth copy of the graph.</p>
+      </div>
+    </div>
+
+    </div>
+  </section>
+
   <footer class="page">
     <span>Rust · Apache Iceberg · custom traversal DSL</span>
     <span>Palette is a homage to Datadog's brand purple (#632CA6 / #8000FF) — not an official Datadog asset</span>
@@ -989,7 +1148,7 @@ RETURN r, entry, admin, d</textarea>
         ['Nodes in this lens', '14'],
         ['Edges in this lens', '13'],
         ['Labels', 'CloudAccount, Resource, CostRecord'],
-        ['Whole dataset', '20 nodes · 21 edges']
+        ['Whole dataset', '20 nodes · 23 edges']
       ],
       badgeFor: function (known, ctx) {
         var amount = ctx.amounts[known.key];
@@ -1040,7 +1199,7 @@ RETURN r, entry, admin, d</textarea>
         ['Nodes in this lens', '9'],
         ['Edges in this lens', '8'],
         ['Labels', 'Resource, IAMRole, DataStore'],
-        ['Whole dataset', '20 nodes · 21 edges']
+        ['Whole dataset', '20 nodes · 23 edges']
       ],
       badgeFor: function () { return 'on attack path'; },
       renderResults: function (statuses, ctx, els) {
@@ -1064,6 +1223,54 @@ RETURN r, entry, admin, d</textarea>
           }).join('') + '</ul>';
         } else {
           html = '<p class="empty-hint">No exploitable path matched this query.</p>';
+        }
+        html += excludedList(statuses.filter(function (s) { return s.status !== 'included'; }));
+        els.body.innerHTML = html;
+      }
+    },
+
+    unused: {
+      id: 'unused',
+      known: [
+        { svgId: 'i1', key: 'Resource:i-checkout-api-1', name: 'i-checkout-api-1' },
+        { svgId: 'i2', key: 'Resource:i-checkout-api-2', name: 'i-checkout-api-2' },
+        { svgId: 'role', key: 'IAMRole:role-checkout-api', name: 'role-checkout-api' },
+        { svgId: 'store', key: 'DataStore:s3-customer-exports', name: 's3-customer-exports' }
+      ],
+      edgeRule: 'endpoints',
+      pathQuery: null,
+      fullStats: [
+        ['Nodes in this lens', '4'],
+        ['Edges in this lens', '4'],
+        ['Labels', 'Resource, IAMRole, DataStore'],
+        ['Whole dataset', '20 nodes · 23 edges']
+      ],
+      // Only a workload itself is "the finding" — role/store share the
+      // included ring (they're part of the same result row) but don't
+      // need their own repeated badge text.
+      badgeFor: function (known) {
+        return known.svgId === 'i1' || known.svgId === 'i2' ? 'unused permission' : '';
+      },
+      renderResults: function (statuses, ctx, els) {
+        var rows = ctx.primaryRows;
+        els.title.textContent = 'Result — ' + rows.length + ' unused permission' + (rows.length === 1 ? '' : 's');
+        var html;
+        if (rows.length) {
+          html = '<ul class="result-list">' + rows.map(function (row) {
+            var resourceName = row.r ? identityOf(row.r) : '?';
+            var roleName = row.role ? identityOf(row.role) : '?';
+            var storeName = row.d ? identityOf(row.d) : '?';
+            var action = row['g.action'];
+            return '<li style="flex-direction:column; align-items:stretch; gap:4px;">' +
+              '<span class="mono" style="font-size:11.5px; color:var(--danger);">unused permission</span>' +
+              '<span style="font-size:12.5px; line-height:1.7;">' + resourceName +
+              ' <span style="color:var(--ink-faint)">via</span> ' + roleName +
+              ' <span style="color:var(--ink-faint)">&rarr;</span> ' + storeName +
+              (action ? ' <span class="mono" style="color:var(--ink-faint); font-size:11px;">(' + action + ')</span>' : '') +
+              '</span></li>';
+          }).join('') + '</ul>';
+        } else {
+          html = '<p class="empty-hint">No unused permissions matched this query.</p>';
         }
         html += excludedList(statuses.filter(function (s) { return s.status !== 'included'; }));
         els.body.innerHTML = html;
