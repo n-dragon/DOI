@@ -17,17 +17,19 @@
 //! the scatter-gather logic itself testable without spinning up real
 //! servers.
 //!
-//! **Decision (Q5, ResolveStart):** broadcast to every partition rather
-//! than routing to one via `PartitionHasher`. The property index (§5.2)
-//! is built per-partition, over that partition's own local nodes only
-//! (see `graph-index`'s builder) — there is no global secondary index in
-//! v1. `PartitionHasher` answers "which partition owns this *known*
-//! `node_id`", which is exactly what every hop *after* the first uses it
-//! for (`scatter_gather_hop` below) — but `ResolveStart`'s property
-//! equality filter (`{name: "Alice"}`) doesn't have a `node_id` to hash
-//! yet, so there is no single partition to route it to. Every partition
-//! is asked, and whatever each one finds (ownership is disjoint by
-//! construction, so results never overlap) is unioned.
+//! **Decision (Q5, ResolveStart/ResolveAll):** broadcast to every
+//! partition rather than routing to one via `PartitionHasher`. The
+//! property index (§5.2) is built per-partition, over that partition's
+//! own local nodes only (see `graph-index`'s builder) — there is no
+//! global secondary index in v1. `PartitionHasher` answers "which
+//! partition owns this *known* `node_id`", which is exactly what every
+//! hop *after* the first uses it for (`scatter_gather_hop` below) — but
+//! neither `ResolveStart`'s property equality filter (`{name: "Alice"}`)
+//! nor `ResolveAll`'s "every node of this label" (least-privilege
+//! use case) has a `node_id` to hash yet, so there is no single
+//! partition to route either to. Every partition is asked, and whatever
+//! each one finds (ownership is disjoint by construction, so results
+//! never overlap) is unioned.
 //!
 //! **Decision (Q6, WHERE filters):** pushed down per-hop rather than
 //! deferred to one final pass the way the mono-partition executor
@@ -43,15 +45,31 @@
 //! this isn't a new tradeoff, just the distributed path adopting it
 //! directly instead of inheriting the single-partition "final pass"
 //! shape it wouldn't even benefit from.
+//!
+//! **Decision (Q-not-exists, `AntiJoin`):** `PlanStep::AntiJoin`'s
+//! `outer_conditions` (a candidate edge's property compared against an
+//! *outer* bound alias's property, e.g. `a.action = g.action`) can't be
+//! resolved once for the whole frontier the way a plain literal
+//! condition can — different frontier rows may have bound a different
+//! `g` edge, with a different `action`. So resolution happens per
+//! binding, right here in `execute_anti_join`, by hydrating whichever
+//! node/edge properties the outer references need (via
+//! `get_node_properties`/`get_edge_properties`, same machinery `WHERE`
+//! hydration and `RETURN` projection already use) and grouping bindings
+//! by their now-fully-resolved condition list before dispatch — bindings
+//! that happen to share the same resolved value (e.g. many workloads
+//! checked against the same `GRANTS` edge) still cost one RPC per
+//! partition, not one per binding.
 
-use crate::{Binding, ExecutionError, Frontier, PlanStep, QueryPlan};
+use crate::filter_eval::evaluate_filter;
+use crate::{AntiJoinStep, Binding, ExecutionError, Frontier, PlanStep, QueryPlan};
 use async_trait::async_trait;
 use graph_cluster::{PartitionHasher, PartitionMap, ReplicaEndpoint};
-use graph_dsl::{ComparisonOp, HopRange, Literal, PropertyFilter};
-use graph_index::{NodeRecord, PartitionId};
-use graph_schema::NodeId;
+use graph_dsl::{HopRange, Literal, PropertyFilter};
+use graph_index::{EdgeRecord, NodeRecord, PartitionId};
+use graph_schema::{EdgeId, NodeId};
 use graph_storage::PropertyValue;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 /// Coordinator -> partition-replica RPC boundary (spec §7.4). See this
 /// module's doc comment for why `graph-query` depends on this trait
@@ -59,6 +77,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[async_trait]
 pub trait PartitionRpc: Send + Sync {
     async fn resolve_start(
+        &self,
+        replica: &ReplicaEndpoint,
+        step: &PlanStep,
+    ) -> Result<Vec<Binding>, ExecutionError>;
+
+    /// *(least-privilege-via-telemetry use case)* Companion to
+    /// `resolve_start` for `PlanStep::ResolveAll`.
+    async fn resolve_all(
         &self,
         replica: &ReplicaEndpoint,
         step: &PlanStep,
@@ -82,6 +108,29 @@ pub trait PartitionRpc: Send + Sync {
         replica: &ReplicaEndpoint,
         ids: &[NodeId],
     ) -> Result<HashMap<NodeId, NodeRecord>, ExecutionError>;
+
+    /// Edge-alias counterpart of `get_node_properties` — hydrates
+    /// `GetEdgeProperties` for `RETURN g.action`-style projection and
+    /// for resolving `AntiJoin.outer_conditions` (see this module's doc
+    /// comment).
+    async fn get_edge_properties(
+        &self,
+        replica: &ReplicaEndpoint,
+        ids: &[EdgeId],
+    ) -> Result<HashMap<EdgeId, EdgeRecord>, ExecutionError>;
+
+    /// *(least-privilege-via-telemetry use case)* Evaluates
+    /// `PlanStep::AntiJoin` for a frontier already grouped by the
+    /// partition owning `step.from_alias`'s node — `conditions` are
+    /// always fully resolved by this point (see this module's doc
+    /// comment). Returns the surviving bindings.
+    async fn check_anti_join(
+        &self,
+        replica: &ReplicaEndpoint,
+        step: &AntiJoinStep,
+        conditions: &[PropertyFilter],
+        frontier: &[Binding],
+    ) -> Result<Vec<Binding>, ExecutionError>;
 }
 
 /// [`DistributedExecutor`]-equivalent (spec §7.4) — named for what it
@@ -112,28 +161,45 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
         let mut steps = plan.steps.iter();
         let first = steps.next().ok_or_else(|| {
             ExecutionError::UnknownAlias(
-                "a plan always has at least a ResolveStart step".to_string(),
+                "a plan always has at least a ResolveStart/ResolveAll step".to_string(),
             )
         })?;
+        if !matches!(
+            first,
+            PlanStep::ResolveStart { .. } | PlanStep::ResolveAll { .. }
+        ) {
+            return Err(ExecutionError::UnknownAlias(
+                "a plan's first step must be ResolveStart or ResolveAll".to_string(),
+            ));
+        }
 
-        let mut frontier = self.broadcast_resolve_start(first, partitions).await?;
+        let mut frontier = self.broadcast_resolve(first, partitions).await?;
 
         for step in steps {
-            if !matches!(step, PlanStep::ExpandHop { .. }) {
-                return Err(ExecutionError::UnknownAlias(
-                    "every plan step after the first must be ExpandHop".to_string(),
-                ));
-            }
-            frontier = self.scatter_gather_hop(step, frontier, partitions).await?;
-            frontier = self.filter_frontier(step, frontier, partitions).await?;
+            frontier = match step {
+                PlanStep::ExpandHop { .. } => {
+                    let expanded = self.scatter_gather_hop(step, frontier, partitions).await?;
+                    self.filter_frontier(step, expanded, partitions).await?
+                }
+                PlanStep::AntiJoin(anti_join) => {
+                    self.execute_anti_join(anti_join, frontier, partitions)
+                        .await?
+                }
+                PlanStep::ResolveStart { .. } | PlanStep::ResolveAll { .. } => {
+                    return Err(ExecutionError::UnknownAlias(
+                        "ResolveStart/ResolveAll can only be the first plan step".to_string(),
+                    ));
+                }
+            };
         }
 
         Ok(dedup(frontier))
     }
 
     /// *(task Q5)* See this module's doc comment for why this broadcasts
-    /// rather than routing to a single partition.
-    async fn broadcast_resolve_start(
+    /// rather than routing to a single partition. Dispatches to whichever
+    /// of `resolve_start`/`resolve_all` matches `step`'s variant.
+    async fn broadcast_resolve(
         &self,
         step: &PlanStep,
         partitions: &PartitionMap,
@@ -144,7 +210,13 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
             let Some(replica) = pick_replica(partitions, partition) else {
                 continue;
             };
-            let bindings = self.rpc.resolve_start(replica, step).await?;
+            let bindings = match step {
+                PlanStep::ResolveStart { .. } => self.rpc.resolve_start(replica, step).await?,
+                PlanStep::ResolveAll { .. } => self.rpc.resolve_all(replica, step).await?,
+                _ => {
+                    unreachable!("broadcast_resolve is only ever called with the plan's first step")
+                }
+            };
             for binding in bindings {
                 if seen.insert(binding_key(&binding)) {
                     merged.push(binding);
@@ -177,6 +249,7 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
             edge_type,
             direction,
             hops,
+            edge_alias,
             ..
         } = step
         else {
@@ -201,6 +274,9 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
             // because `filters` is empty here (see
             // `local_executor::apply_filters`, which no-ops before ever
             // looking at `to_label` when there's nothing to filter).
+            // `edge_alias` only ever applies to the *first* (and, given
+            // the validator's single-hop restriction on aliased edges,
+            // *only*) round.
             let round_step = PlanStep::ExpandHop {
                 from_alias: cursor_alias.clone(),
                 to_alias: to_alias.clone(),
@@ -209,6 +285,7 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
                 direction: *direction,
                 hops: HopRange { min: 1, max: 1 },
                 filters: Vec::new(),
+                edge_alias: if depth == 1 { edge_alias.clone() } else { None },
             };
 
             current = self.one_round(&round_step, &current, partitions).await?;
@@ -248,7 +325,7 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
                 "one_round called with a non-ExpandHop step".to_string(),
             ));
         };
-        let by_partition = self.group_by_owning_partition(frontier, from_alias)?;
+        let by_partition = group_by_owning_node_partition(&self.hasher, frontier, from_alias)?;
 
         let mut next = Vec::new();
         for (partition, group) in by_partition {
@@ -266,24 +343,6 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
             next.extend(result.remote.into_iter().map(|(_, binding)| binding));
         }
         Ok(next)
-    }
-
-    fn group_by_owning_partition(
-        &self,
-        frontier: &[Binding],
-        alias: &str,
-    ) -> Result<HashMap<PartitionId, Vec<Binding>>, ExecutionError> {
-        let mut groups: HashMap<PartitionId, Vec<Binding>> = HashMap::new();
-        for binding in frontier {
-            let &node = binding
-                .get(alias)
-                .ok_or_else(|| ExecutionError::UnknownAlias(alias.to_string()))?;
-            groups
-                .entry(self.hasher.partition_of(node))
-                .or_default()
-                .push(binding.clone());
-        }
-        Ok(groups)
     }
 
     /// *(task Q6, WHERE handling)* See this module's doc comment for why
@@ -310,7 +369,7 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
 
         let ids: Vec<NodeId> = frontier
             .iter()
-            .filter_map(|b| b.get(to_alias).copied())
+            .filter_map(|b| b.nodes.get(to_alias).copied())
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
@@ -320,7 +379,7 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
         Ok(frontier
             .into_iter()
             .filter(|binding| {
-                let Some(&id) = binding.get(to_alias) else {
+                let Some(&id) = binding.nodes.get(to_alias) else {
                     return false;
                 };
                 let Some(record) = properties.get(&id) else {
@@ -335,6 +394,141 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
                     .all(|f| evaluate_filter(&record.properties, f))
             })
             .collect())
+    }
+
+    /// *(least-privilege-via-telemetry use case, task Q-not-exists)*
+    /// Evaluates `PlanStep::AntiJoin`: resolves any `outer_conditions`
+    /// per binding (see this module's doc comment for why that can't
+    /// happen once for the whole frontier), groups bindings that end up
+    /// with the same fully-resolved condition list, and dispatches one
+    /// `check_anti_join` RPC per (partition, resolved-condition-group).
+    async fn execute_anti_join(
+        &self,
+        step: &AntiJoinStep,
+        frontier: Vec<Binding>,
+        partitions: &PartitionMap,
+    ) -> Result<Vec<Binding>, ExecutionError> {
+        if frontier.is_empty() {
+            return Ok(frontier);
+        }
+
+        let groups = if step.outer_conditions.is_empty() {
+            vec![(step.literal_conditions.clone(), frontier)]
+        } else {
+            self.resolve_and_group_by_condition(step, frontier, partitions)
+                .await?
+        };
+
+        let mut survivors = Vec::new();
+        for (conditions, bindings) in groups {
+            let by_partition =
+                group_by_owning_node_partition(&self.hasher, &bindings, &step.from_alias)?;
+            for (partition, group) in by_partition {
+                let Some(replica) = pick_replica(partitions, partition) else {
+                    continue;
+                };
+                let result = self
+                    .rpc
+                    .check_anti_join(replica, step, &conditions, &group)
+                    .await?;
+                survivors.extend(result);
+            }
+        }
+        Ok(survivors)
+    }
+
+    /// Hydrates every outer alias `step.outer_conditions` references
+    /// (once, deduplicated across the whole frontier — not once per
+    /// binding) and produces one fully-resolved condition list per
+    /// binding, bucketed by bindings that share the same list. A binding
+    /// whose outer reference can't be resolved (its partition was
+    /// unreachable, or the stored value has no `Literal` counterpart —
+    /// same gap `PropertyKey` already has, see `property_value_to_literal`)
+    /// is dropped rather than guessed at, same "WHERE is a positive
+    /// constraint" posture `filter_frontier` already takes.
+    async fn resolve_and_group_by_condition(
+        &self,
+        step: &AntiJoinStep,
+        frontier: Vec<Binding>,
+        partitions: &PartitionMap,
+    ) -> Result<Vec<(Vec<PropertyFilter>, Vec<Binding>)>, ExecutionError> {
+        let sample = &frontier[0];
+        let mut outer_is_edge: HashMap<&str, bool> = HashMap::new();
+        for (_, _, outer) in &step.outer_conditions {
+            let is_edge = if sample.edges.contains_key(outer.alias.as_str()) {
+                true
+            } else if sample.nodes.contains_key(outer.alias.as_str()) {
+                false
+            } else {
+                return Err(ExecutionError::UnknownAlias(outer.alias.clone()));
+            };
+            outer_is_edge.insert(outer.alias.as_str(), is_edge);
+        }
+
+        let mut node_ids_needed: HashSet<NodeId> = HashSet::new();
+        let mut edge_ids_needed: HashSet<EdgeId> = HashSet::new();
+        for binding in &frontier {
+            for (_, _, outer) in &step.outer_conditions {
+                if outer_is_edge[outer.alias.as_str()] {
+                    if let Some(&id) = binding.edges.get(&outer.alias) {
+                        edge_ids_needed.insert(id);
+                    }
+                } else if let Some(&id) = binding.nodes.get(&outer.alias) {
+                    node_ids_needed.insert(id);
+                }
+            }
+        }
+
+        let node_props = if node_ids_needed.is_empty() {
+            HashMap::new()
+        } else {
+            let ids: Vec<NodeId> = node_ids_needed.into_iter().collect();
+            self.get_node_properties(&ids, partitions).await?
+        };
+        let edge_props = if edge_ids_needed.is_empty() {
+            HashMap::new()
+        } else {
+            let ids: Vec<EdgeId> = edge_ids_needed.into_iter().collect();
+            self.get_edge_properties(&ids, partitions).await?
+        };
+
+        let mut groups: Vec<(Vec<PropertyFilter>, Vec<Binding>)> = Vec::new();
+        'binding: for binding in frontier {
+            let mut resolved = step.literal_conditions.clone();
+            for (inner_property, op, outer) in &step.outer_conditions {
+                let record_properties = if outer_is_edge[outer.alias.as_str()] {
+                    let Some(&id) = binding.edges.get(&outer.alias) else {
+                        continue 'binding;
+                    };
+                    edge_props.get(&id).map(|r| &r.properties)
+                } else {
+                    let Some(&id) = binding.nodes.get(&outer.alias) else {
+                        continue 'binding;
+                    };
+                    node_props.get(&id).map(|r| &r.properties)
+                };
+                let Some(value) = record_properties.and_then(|p| p.get(&outer.property)) else {
+                    continue 'binding;
+                };
+                let Some(literal) = property_value_to_literal(value) else {
+                    continue 'binding;
+                };
+                resolved.push(PropertyFilter {
+                    property: inner_property.clone(),
+                    op: *op,
+                    value: literal,
+                });
+            }
+
+            match groups
+                .iter_mut()
+                .find(|(conditions, _)| conditions == &resolved)
+            {
+                Some((_, bucket)) => bucket.push(binding),
+                None => groups.push((resolved, vec![binding])),
+            }
+        }
+        Ok(groups)
     }
 
     /// Fetches property records for `ids`, grouped and routed by owning
@@ -355,6 +549,42 @@ impl<R: PartitionRpc> ScatterGatherExecutor<R> {
                 continue;
             };
             properties.extend(self.rpc.get_node_properties(replica, &ids).await?);
+        }
+        Ok(properties)
+    }
+
+    /// Edge-alias counterpart of [`Self::get_node_properties`] — routing
+    /// is by the *destination-agnostic* hash of the edge id itself is
+    /// **not** how edge ownership works (see `graph-index`'s builder:
+    /// an edge's record lives with its *source* node's partition), so
+    /// this can't just reuse `PartitionHasher::partition_of` on the
+    /// `EdgeId` the way node lookups do. Instead it asks *every*
+    /// partition (mirroring `broadcast_resolve`) — simpler than
+    /// threading "which alias's source partition does this edge belong
+    /// to" through every caller, and edge-property lookups are always
+    /// small, already-bounded-by-the-frontier batches in practice (final
+    /// `RETURN` hydration, anti-join outer-condition resolution), not a
+    /// hot path worth the extra bookkeeping a targeted route would save.
+    pub async fn get_edge_properties(
+        &self,
+        ids: &[EdgeId],
+        partitions: &PartitionMap,
+    ) -> Result<HashMap<EdgeId, EdgeRecord>, ExecutionError> {
+        let mut properties: HashMap<EdgeId, EdgeRecord> = HashMap::new();
+        let mut remaining: HashSet<EdgeId> = ids.iter().copied().collect();
+        for partition in partitions.replicas_by_partition.keys().copied() {
+            if remaining.is_empty() {
+                break;
+            }
+            let Some(replica) = pick_replica(partitions, partition) else {
+                continue;
+            };
+            let batch: Vec<EdgeId> = remaining.iter().copied().collect();
+            let found = self.rpc.get_edge_properties(replica, &batch).await?;
+            for (id, record) in found {
+                remaining.remove(&id);
+                properties.insert(id, record);
+            }
         }
         Ok(properties)
     }
@@ -380,52 +610,70 @@ fn group_ids_by_partition(
     groups
 }
 
-fn evaluate_filter(properties: &BTreeMap<String, PropertyValue>, filter: &PropertyFilter) -> bool {
-    match properties.get(&filter.property) {
-        Some(value) => literal_matches(value, filter.op, &filter.value),
-        None => false,
+/// Groups `frontier` by the partition owning each binding's `alias`
+/// *node* — the routing rule every step that advances from a known,
+/// already-bound node (an `ExpandHop` round, an `AntiJoin` check) shares.
+fn group_by_owning_node_partition(
+    hasher: &PartitionHasher,
+    frontier: &[Binding],
+    alias: &str,
+) -> Result<HashMap<PartitionId, Vec<Binding>>, ExecutionError> {
+    let mut groups: HashMap<PartitionId, Vec<Binding>> = HashMap::new();
+    for binding in frontier {
+        let &node = binding
+            .nodes
+            .get(alias)
+            .ok_or_else(|| ExecutionError::UnknownAlias(alias.to_string()))?;
+        groups
+            .entry(hasher.partition_of(node))
+            .or_default()
+            .push(binding.clone());
     }
+    Ok(groups)
 }
 
-fn literal_matches(value: &PropertyValue, op: ComparisonOp, literal: &Literal) -> bool {
-    use std::cmp::Ordering;
-    let ordering = match (value, literal) {
-        (PropertyValue::Int64(v), Literal::Int64(l)) => v.partial_cmp(l),
-        (PropertyValue::Float64(v), Literal::Float64(l)) => v.partial_cmp(l),
-        (PropertyValue::Bool(v), Literal::Bool(l)) => Some(v.cmp(l)),
-        (PropertyValue::String(v), Literal::String(l)) => Some(v.as_str().cmp(l.as_str())),
-        // Type mismatch between the stored property and the filter
-        // literal — the DSL validator (D7-D9) already rejects this
-        // combination before a plan is ever built, so this is
-        // unreachable in practice; treated as "doesn't match" rather
-        // than panicking, since a partition-side data/schema drift
-        // shouldn't take a query down.
-        _ => None,
-    };
-    let Some(ordering) = ordering else {
-        return false;
-    };
-    match op {
-        ComparisonOp::Eq => ordering == Ordering::Equal,
-        ComparisonOp::Ne => ordering != Ordering::Equal,
-        ComparisonOp::Lt => ordering == Ordering::Less,
-        ComparisonOp::Lte => ordering != Ordering::Greater,
-        ComparisonOp::Gt => ordering == Ordering::Greater,
-        ComparisonOp::Gte => ordering != Ordering::Less,
+/// `List`/`Timestamp`/`Bytes`/`Null` have no `Literal` counterpart in
+/// v1's DSL (`Timestamp` compares the *other* direction, string-literal
+/// against stored-Timestamp, see `filter_eval::literal_matches` — there
+/// is no way to go from a `Timestamp` *value* back to a `Literal` to put
+/// into a fresh condition) — a resolved outer value of one of these
+/// types can't be turned into an `AntiJoin` condition, so the binding
+/// that needed it is dropped by the caller rather than the condition
+/// silently skipped.
+fn property_value_to_literal(value: &PropertyValue) -> Option<Literal> {
+    match value {
+        PropertyValue::Int64(v) => Some(Literal::Int64(*v)),
+        PropertyValue::Float64(v) => Some(Literal::Float64(*v)),
+        PropertyValue::Bool(v) => Some(Literal::Bool(*v)),
+        PropertyValue::String(v) => Some(Literal::String(v.clone())),
+        PropertyValue::Timestamp(_)
+        | PropertyValue::Bytes(_)
+        | PropertyValue::List(_)
+        | PropertyValue::Null => None,
     }
 }
 
 /// *(task Q7)* Deterministic dedup key for a [`Binding`] — sorted
-/// `(alias, node_id)` pairs, since `HashMap` (what `Binding` is a type
-/// alias for) implements `PartialEq` but not `Hash`. Used at every merge
-/// point (`ResolveStart` broadcast, each scatter round's implicit
-/// continuation, and the final result set) — this only ever eliminates
-/// exact duplicate bindings, never reduces or groups them (no
-/// aggregation, spec §7.1/§1.4).
-fn binding_key(binding: &Binding) -> Vec<(String, u64)> {
-    let mut key: Vec<(String, u64)> = binding
+/// `(kind, alias, id)` triples (kind distinguishes a node alias from an
+/// edge alias of the same name, which the grammar/validator never
+/// actually allow to collide, but keeping them in separate tagged slots
+/// costs nothing and avoids relying on that). `HashMap` doesn't
+/// implement `Hash` itself, hence building an explicit sortable key.
+/// Used at every merge point (`ResolveStart`/`ResolveAll` broadcast,
+/// each scatter round's implicit continuation, and the final result
+/// set) — this only ever eliminates exact duplicate bindings, never
+/// reduces or groups them (no aggregation, spec §7.1/§1.4).
+fn binding_key(binding: &Binding) -> Vec<(u8, String, u64)> {
+    let mut key: Vec<(u8, String, u64)> = binding
+        .nodes
         .iter()
-        .map(|(alias, id)| (alias.clone(), id.0))
+        .map(|(alias, id)| (0u8, alias.clone(), id.0))
+        .chain(
+            binding
+                .edges
+                .iter()
+                .map(|(alias, id)| (1u8, alias.clone(), id.0)),
+        )
         .collect();
     key.sort();
     key
@@ -566,6 +814,16 @@ mod tests {
                 .await
         }
 
+        async fn resolve_all(
+            &self,
+            replica: &ReplicaEndpoint,
+            step: &PlanStep,
+        ) -> Result<Vec<Binding>, ExecutionError> {
+            SimpleLocalExecutor
+                .resolve_all(self.handle(replica), step)
+                .await
+        }
+
         async fn expand_hop(
             &self,
             replica: &ReplicaEndpoint,
@@ -587,6 +845,30 @@ mod tests {
                 .iter()
                 .filter_map(|id| generation.node_records.get(id).map(|r| (*id, r.clone())))
                 .collect())
+        }
+
+        async fn get_edge_properties(
+            &self,
+            replica: &ReplicaEndpoint,
+            ids: &[EdgeId],
+        ) -> Result<HashMap<EdgeId, EdgeRecord>, ExecutionError> {
+            let generation = self.handle(replica).acquire();
+            Ok(ids
+                .iter()
+                .filter_map(|id| generation.edge_records.get(id).map(|r| (*id, r.clone())))
+                .collect())
+        }
+
+        async fn check_anti_join(
+            &self,
+            replica: &ReplicaEndpoint,
+            step: &AntiJoinStep,
+            conditions: &[PropertyFilter],
+            frontier: &[Binding],
+        ) -> Result<Vec<Binding>, ExecutionError> {
+            SimpleLocalExecutor
+                .check_anti_join(self.handle(replica), step, conditions, frontier)
+                .await
         }
     }
 
@@ -676,8 +958,8 @@ mod tests {
             .await
             .expect("distributed execution should succeed");
 
-        let friend_alias = plan.project.first().expect("RETURN friend");
-        let friends: HashSet<NodeId> = bindings.iter().map(|b| b[friend_alias]).collect();
+        let friend_alias = &plan.project.first().expect("RETURN friend").alias;
+        let friends: HashSet<NodeId> = bindings.iter().map(|b| b.nodes[friend_alias]).collect();
 
         // Bob (1990) excluded by the WHERE filter; Carol and Dave remain
         // — same expectation as the mono-partition Q4 test, despite Bob

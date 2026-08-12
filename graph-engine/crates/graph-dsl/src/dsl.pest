@@ -10,9 +10,21 @@
 //   WHERE p.name = "Alice" AND colleague <> p
 //   RETURN colleague, o
 //
-// The full grammar (aliasing rules beyond this, `ORDER BY`/`LIMIT`/
-// pagination) is explicitly `TBD` in the spec (§7.1) — this covers only
-// the two prioritized query shapes above.
+// Extended (least-privilege-via-telemetry use case) with exactly what
+// that query shape needs and nothing more — see each rule's comment for
+// the scoping decision:
+//
+//   MATCH (w:Workload)-[:ASSUMES]->(r:IAMRole)-[g:GRANTS]->(d:DataStore)
+//   WHERE d.data_class = "sensitive"
+//     AND NOT EXISTS {
+//       MATCH (w)-[a:ACCESSED]->(d)
+//       WHERE a.action = g.action AND a.last_seen >= "2024-05-01T00:00:00Z"
+//     }
+//   RETURN w.service, w.team, r.arn, g.action, d.arn
+//
+// The rest of the full grammar (`ORDER BY`/`LIMIT`/pagination, `OR`,
+// nested `NOT EXISTS`, aggregation) is still explicitly `TBD`/out of
+// scope (§7.1, §1.4).
 
 query = { SOI ~ "MATCH" ~ pattern ~ where_clause? ~ return_clause ~ EOI }
 
@@ -30,7 +42,18 @@ outgoing_edge = { "-" ~ edge_detail? ~ "->" }
 
 incoming_edge = { "<-" ~ edge_detail? ~ "-" }
 
-edge_detail = { "[" ~ (":" ~ ident)? ~ hop_range? ~ "]" }
+// `edge_alias` (e.g. `[g:GRANTS]`) binds the *specific* edge instance
+// traversed, for later `alias.property` reference in `WHERE`/`RETURN` —
+// deliberately restricted (task Q-edge-alias, `graph-query`'s planner)
+// to single hops (`hops.min == hops.max == 1`): which of a `*1..3`
+// chain's several edges an alias would even refer to is ambiguous, and
+// no query this DSL targets needs it. Enforced by the validator (D7-D9
+// extension), not the grammar — the grammar stays permissive so the
+// error message can be specific ("edge alias on a variable-length hop")
+// rather than a generic parse failure.
+edge_detail = { "[" ~ edge_alias? ~ (":" ~ ident)? ~ hop_range? ~ "]" }
+
+edge_alias = @{ ident }
 
 // Variable-length traversal, e.g. `*1..3` (§7.1). Absent = a single
 // direct hop (min = max = 1), the default a plain `-->`/`<--` means.
@@ -38,22 +61,69 @@ hop_range = { "*" ~ number ~ ".." ~ number }
 
 where_clause = { "WHERE" ~ where_condition ~ ("AND" ~ where_condition)* }
 
-// Tried in this order so a bare `alias OP alias` (no ".") correctly
-// falls through to `alias_comparison` once `property_condition`'s
-// mandatory "." fails to match.
-where_condition = { property_condition | alias_comparison }
+// Tried in this order:
+// - `not_exists_clause` starts with the unambiguous keyword `NOT`.
+// - `property_property_comparison` before `property_condition`: both
+//   start with `ident "." ident comparison_op`, but the former needs a
+//   second `ident "." ident` on the right where the latter needs a
+//   `literal` — PEG backtracks to `property_condition` whenever the
+//   right-hand side isn't itself a dotted reference (see that rule's
+//   comment for the `true`/`false` edge case).
+// - `alias_comparison` last, once nothing with a "." on either side
+//   matched.
+where_condition = {
+    not_exists_clause
+  | property_property_comparison
+  | property_condition
+  | alias_comparison
+}
 
 property_condition = { ident ~ "." ~ ident ~ comparison_op ~ literal }
+
+// `a.action = g.action` (least-privilege use case) — comparing one
+// bound alias's property against *another* bound alias's property,
+// rather than against a literal (`property_condition`) or comparing
+// two whole aliases for identity (`alias_comparison`). Either alias may
+// be a node or an edge alias; which is which is resolved against the
+// pattern by the validator, not by this grammar (a node and an edge
+// alias look identical lexically).
+property_property_comparison = {
+    ident ~ "." ~ ident ~ comparison_op ~ ident ~ "." ~ ident
+}
 
 // e.g. `colleague <> p` (§7.1 pattern-matching example) — comparing two
 // bound aliases for (in)equality, not a property lookup.
 alias_comparison = { ident ~ comparison_op ~ ident }
 
+// Correlated existence check, e.g.:
+//   NOT EXISTS { MATCH (w)-[a:ACCESSED]->(d) WHERE a.action = g.action }
+// Scoped deliberately narrow (task D-not-exists): the inner `pattern`
+// is only ever meant to re-anchor on aliases already bound by the outer
+// `MATCH` (`(w)`/`(d)` above carry no label/properties precisely
+// because they're references, not fresh bindings) and describe exactly
+// one additional hop from there — not an arbitrary independent
+// sub-query. The grammar itself doesn't enforce "exactly one hop" or
+// "anchors are already-bound aliases" (both would need semantic, not
+// syntactic, checking anyway); the validator does. Nesting a second
+// `NOT EXISTS` inside this one is syntactically accepted (the grammar
+// is recursive) but rejected by the validator — v1 has no use case that
+// needs it, and evaluating it would need genuine subquery planning
+// rather than the single correlated anti-join `graph-query` implements.
+not_exists_clause = {
+    "NOT" ~ "EXISTS" ~ "{" ~ "MATCH" ~ pattern ~ where_clause? ~ "}"
+}
+
 // Longer operators listed before any shorter operator they share a
 // prefix with, so e.g. `<=` isn't mis-consumed as `<` followed by `=`.
 comparison_op = { "<=" | ">=" | "<>" | "=" | "<" | ">" }
 
-return_clause = { "RETURN" ~ ident ~ ("," ~ ident)* }
+// `alias` alone projects the whole matched node (existing behavior);
+// `alias.property` (least-privilege use case's `g.action`) projects one
+// property — of a node *or* an edge alias, same ambiguity the validator
+// resolves as `property_property_comparison` does.
+return_clause = { "RETURN" ~ return_item ~ ("," ~ return_item)* }
+
+return_item = { ident ~ ("." ~ ident)? }
 
 literal = { string_literal | float_literal | int_literal | bool_literal }
 

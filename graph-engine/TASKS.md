@@ -409,6 +409,206 @@ côté fil laquelle des deux catégories Rust a produit un binding donné.
 
 ---
 
+## Extension DSL hors roadmap — moindre privilège via télémétrie — ✅ terminé
+
+> **Jalon** : le schéma dédié `schema/least_privilege.graphidl` (use
+> case "moindre privilège prouvé par la télémétrie" — croiser entités,
+> permissions déclarées et logs d'accès observés pour trouver les
+> permissions IAM jamais utilisées) documentait à l'origine un **gap** :
+> la requête centrale du use case (`déclaré MOINS observé`) n'était pas
+> exprimable dans le DSL v1 — pas d'alias d'arête, pas de comparaison
+> propriété-propriété inter-alias, pas de `NOT EXISTS`/anti-jointure. Ce
+> jalon lève ce gap : la requête centrale tourne désormais telle quelle,
+> vérifié bout en bout (`bin/graph-coordinator/tests/lp_end_to_end.rs`,
+> LP1) sur deux partitions réelles avec vrai gRPC — pas seulement au
+> niveau unitaire. La requête, verbatim :
+>
+> ```
+> MATCH (w:Workload)-[:ASSUMES]->(r:IAMRole)-[g:GRANTS]->(d:DataStore)
+> WHERE d.data_class = "sensitive"
+>   AND NOT EXISTS {
+>     MATCH (w)-[a:ACCESSED]->(d)
+>     WHERE a.action = g.action AND a.last_seen >= "2024-05-01T00:00:00Z"
+>   }
+> RETURN w.workload_id, w.team, r.arn, g.action, d.arn
+> ```
+
+### graph-dsl (extension) — ✅ terminé (extension hors roadmap)
+
+- ✅ **D10** — Grammaire `pest` : `edge_alias` (`[g:GRANTS]`, `[a:ACCESSED]`,
+  réutilise la position déjà occupée par le type d'arête dans
+  `edge_detail`) ; `return_item` étendu pour accepter `alias.propriété`
+  en plus d'un alias nu (`RETURN w.team, r.arn` autant que `RETURN w`,
+  mélangés dans la même clause) ; `property_property_comparison`
+  (`a.action = g.action`, à distinguer de `WhereCondition::Property`
+  *(alias.propriété OP littéral)* et de `AliasComparison` *(alias OP
+  alias)* — les trois lectures des mêmes tokens auraient été plausibles) ;
+  `not_exists_clause` (`AND NOT EXISTS { MATCH ... [WHERE ...] }`),
+  imbriqué dans la grammaire `WHERE` existante plutôt qu'une clause à
+  part, pour permettre `d.data_class = "sensitive" AND NOT EXISTS {...}`
+  dans une seule clause `WHERE`.
+- ✅ **D11** — AST : `EdgePattern.alias: Option<String>` ; nouveaux
+  `PropertyRef { alias, property }`, `ExistsSubquery { pattern,
+  where_conditions }`, `ReturnItem { alias, property: Option<String> }`
+  (remplace le `Vec<String>` de `Query.returns` — un alias nu est
+  `ReturnItem { property: None, .. }`, pas un type distinct, pour que le
+  planificateur/exécuteur n'aient qu'une seule forme à traiter) ;
+  `WhereCondition::{PropertyComparison, NotExists}`. *(dépend de D10)*
+- ✅ **D12** — `PestParser` : parsing pour toutes les nouvelles règles.
+  Décision de scope : un alias d'arête n'est accepté que sur un hop à
+  hop fixe (`hops == {1,1}`) — un alias sur `*1..3` désignerait quelle
+  arête de la chaîne ? Rejeté à la validation (D13,
+  `EdgeAliasOnVariableLengthHop`) plutôt qu'à la grammaire, pour un
+  message d'erreur explicite. *(dépend de D11)*
+- ✅ **D13** — `SchemaValidator` réécrit autour d'un `Scope` (alias →
+  label/type liés par le `MATCH` externe) : `validate_where_condition`
+  récursif (couvre le nouveau `NotExists` imbriqué), `validate_not_exists`,
+  `validate_return_item`, `validate_property_ref`,
+  `validate_edge_property`. Nouvelles règles actées :
+  - Un alias référencé dans `NOT EXISTS { MATCH (x)... }` sans
+    label/propriétés doit déjà être lié par le `MATCH` externe
+    (`NotExistsAnchorNotPreBound`) — c'est ce qui rend la sous-requête
+    *corrélée* plutôt qu'un second pattern indépendant ; lui redonner un
+    label serait un second nœud sans lien avec l'alias externe, rejeté
+    aussi (`a_not_exists_anchor_redeclaring_a_label_fails`).
+  - `NOT EXISTS` n'accepte qu'un unique hop **sortant** entre deux alias
+    déjà liés (`NotExistsWrongShape`, `NotExistsMustBeOutgoing`) — motivé
+    par l'exécution distribuée (voir Q11 : l'enregistrement d'une arête
+    vit sur la partition de sa source, un hop entrant obligerait à
+    interroger la partition de la destination pour une info qui n'y est
+    pas).
+  - Pas de `NOT EXISTS` imbriqué (`NestedNotExists`) — hors scope, le
+    use case n'en a jamais eu besoin et la corrélation à plus d'un
+    niveau complexifierait Q11 sans bénéfice démontré.
+  Testé directement sur la requête centrale du use case, chargée depuis
+  le vrai fichier schéma via `include_str!`
+  (`the_least_privilege_example_validates`) plutôt que sur un exemple
+  jouet — pour que ce test casse si le schéma et le validateur divergent.
+  *(dépend de D12)*
+
+*Décision transverse (D10-D13)* : aucune fonction `datetime()`/
+`duration()` n'a été ajoutée au DSL — `a.last_seen >= "2024-05-01T…Z"`
+compare un littéral `String` RFC3339 à une propriété `Timestamp`
+directement. La coercion (RFC3339 → microsecondes) est faite côté
+exécution (voir Q9/`filter_eval.rs`), pas dans l'AST : ajouter un
+langage d'expressions dédié aux dates aurait été disproportionné pour un
+seul point d'usage, et le DSL reste sans fonctions au sens large (§7.1).
+
+### graph-index (extension) — ✅ terminé (extension hors roadmap)
+
+- ✅ **IX9** — `EdgeRecord { edge_type, properties }` et
+  `IndexGeneration.edge_records: HashMap<EdgeId, EdgeRecord>` — jusqu'ici
+  seules les propriétés des *nœuds* étaient conservées après
+  construction d'index (`node_records`), les arêtes n'existaient que
+  comme entrées CSR sans propriétés attachées. Nécessaire pour évaluer
+  `a.action = g.action` (propriétés d'arête) et projeter
+  `RETURN g.action`.
+- ✅ **IX10** — `IcebergIndexBuilder::build` peuple `edge_records`,
+  filtré par `partition_of(row.src, n_partitions) == partition`.
+  *Décision* : l'enregistrement d'une arête est possédé par la partition
+  de sa **source**, exactement le même critère que `build_csr` utilise
+  déjà pour décider si une arête a une entrée d'adjacence sortante
+  locale — cohérence délibérée plutôt qu'une seconde règle de
+  répartition à mémoriser séparément (voir aussi la note dans le
+  doc-comment de `builder.rs`). Conséquence directe pour Q11 : une
+  requête `GetEdgeProperties`/anti-jointure pour une `EdgeId` donnée
+  n'a jamais besoin d'atteindre plus d'une partition, la même qui a émis
+  cette arête via `ExpandHop`/`ResolveStart` en premier lieu. Testé
+  (`edge_records_hold_the_full_property_set_per_locally_owned_edge`,
+  `edge_records_follow_the_source_nodes_partition`). *(dépend de IX9)*
+
+### graph-proto (extension) — ✅ terminé (extension hors roadmap)
+
+- ✅ **PROTO1** — `.proto` étendu sans casser le contrat existant :
+  `ExpandHopRequest.edge_alias` (optionnel — absent si l'appelant ne
+  demande pas à lier l'arête), `Binding.edge_ids_by_alias` (le pendant
+  arête de la map nœud existante), `ResolveAll`/`ResolveAllRequest`
+  (scan complet d'un label sans filtre — nécessaire pour
+  `MATCH (w:Workload)` sans `{...}`, jusqu'ici toute requête supposait un
+  filtre de départ), `CheckAntiJoin`/`AntiJoinRequest`/
+  `AntiJoinResponse` (l'anti-jointure côté partition — §description
+  Q11), `GetEdgeProperties` (symétrique de `GetNodeProperties`, Phase 1),
+  `QueryResult.edge_properties` et projection étendue pour porter
+  `"alias.propriété"` comme clé plate plutôt que d'ajouter un message
+  dédié par forme de projection (voir Q12).
+
+### graph-query (extension) — ✅ terminé (extension hors roadmap)
+
+- ✅ **Q9** — `filter_eval.rs` (nouveau, factorisé hors de
+  `local_executor.rs`/`distributed_executor.rs` — la même évaluation de
+  filtre sert désormais aux deux) : coercion RFC3339 → microsecondes
+  spécifiquement pour la paire `(PropertyValue::Timestamp,
+  Literal::String)`, via `chrono`. *Gap détecté et corrigé en cours de
+  route* : sans cette coercion, `a.last_seen >= "2024-05-01T…Z"` aurait
+  silencieusement ne jamais matché (comparaison d'un `i64` en
+  microsecondes à une chaîne de caractères).
+- ✅ **Q10** — `Binding` : `type Binding = HashMap<String, NodeId>`
+  (Phase 1/2) devient une struct `{ nodes: HashMap<String, NodeId>,
+  edges: HashMap<String, EdgeId> }` — une seule ligne de résultat lie
+  maintenant des alias de nœuds *et* d'arêtes. `PlanStep::ResolveAll`
+  (scan sans filtre), `AntiJoinStep { anchor_alias, edge_alias,
+  target_alias, edge_type, direction, edge_conditions,
+  outer_conditions }`, `ExpandHop.edge_alias`. *Décision multigraphe* :
+  la première implémentation dédoublonnait les bindings d'un `ExpandHop`
+  par `(binding_idx, dst)`, ce qui fusionnait silencieusement deux
+  arêtes parallèles entre les mêmes nœuds en un seul binding — perdant
+  l'alias d'une des deux arêtes. Corrigé : la branche avec alias d'arête
+  n'applique aucun dédoublonnage (chaque entrée d'adjacence est déjà
+  distincte par construction), seule la branche sans alias (qui ne peut
+  pas observer la différence) continue de dédoublonner.
+- ✅ **Q11** — `LocalExecutor::{resolve_all, check_anti_join}` et
+  `planner::compile_anti_join`. *Décision* : `NOT EXISTS` compile en un
+  `PlanStep::AntiJoin` séparé, ajouté après la chaîne principale plutôt
+  qu'imbriqué dans le plan — un anti-join filtre des bindings déjà
+  résolus, il n'a pas besoin d'être entrelacé avec `ResolveStart`/
+  `ExpandHop`.
+- ✅ **Q12** — `ScatterGatherExecutor::execute_anti_join` : route
+  `PlanStep::AntiJoin` en RPC `CheckAntiJoin`. *Décision (la plus
+  significative de cette phase)* : les `outer_conditions` d'un
+  `AntiJoinStep` (ex. `a.action = g.action`) référencent une propriété
+  d'un alias *externe* dont la valeur varie par binding (le `g` lié par
+  cette ligne précise) — impossible à résoudre une seule fois pour toute
+  la frontière comme le fait `WHERE` après un `ExpandHop` classique.
+  Résolu par `resolve_and_group_by_condition` : hydrate, pour chaque
+  binding, les propriétés nœud/arête nécessaires (`GetNodeProperties`/
+  `GetEdgeProperties`, routées vers la bonne partition via IX10), puis
+  regroupe les bindings qui partagent la même liste de conditions
+  *déjà résolues* avant d'émettre une requête `CheckAntiJoin` — un appel
+  par `(partition, groupe de conditions)`, pas un appel par binding.
+  `RETURN alias.propriété` projeté sur le fil sans faire exploser le
+  schéma du message : réutilise le `projection: map<string, Value>`
+  existant avec une clé composite `"alias.propriété"`, les alias nus
+  continuant d'utiliser les maps `properties`/`edge_properties`
+  existantes pour l'enregistrement complet.
+
+### bin/graph-partition-node, bin/graph-coordinator (extension) — ✅ terminé (extension hors roadmap)
+
+- ✅ **PN6/CO6** — `PartitionServiceImpl`/`GraphServiceImpl` réécrits pour
+  porter tout ce qui précède sur le fil : `ResolveAllStream`,
+  `resolve_all`/`check_anti_join`/`get_edge_properties`, `expand_hop`
+  câblé pour `edge_alias`, `binding_to_proto`/`proto_binding_to_binding`
+  étendus pour la map d'arêtes. Côté coordinateur, la projection finale
+  distingue par binding si un alias est un alias de nœud ou d'arête
+  (`alias_is_edge`, résolu en observant simplement dans quelle map du
+  premier binding disponible l'alias apparaît) avant de choisir entre
+  projection d'enregistrement complet (alias nu) et projection scalaire
+  (`alias.propriété`).
+- ✅ **LP1** — Test d'intégration bout en bout dédié
+  (`bin/graph-coordinator/tests/lp_end_to_end.rs`), même forme que CO4
+  mais sur `schema/least_privilege.graphidl`, **deux** partitions réelles
+  (pas une seule comme CO4) pour que `CheckAntiJoin` franchisse
+  effectivement une frontière de partition, et la requête centrale du
+  use case verbatim. Jeu de données : un rôle/un datastore sensible
+  partagés par quatre workloads répartis sur les deux partitions (vérifié
+  par `assert!` plutôt que supposé) — un seul a utilisé le droit accordé
+  dans la fenêtre de confiance, les trois autres (jamais accédé, action
+  différente, accès hors fenêtre) sont les trois permissions non
+  utilisées attendues. Vérifie aussi que `RETURN
+  w.workload_id, w.team, r.arn, g.action, d.arn` projette correctement un
+  mélange d'alias de nœud et d'arête avec propriété.
+
+---
+
 ## Vue d'ensemble des dépendances inter-crates
 
 ```

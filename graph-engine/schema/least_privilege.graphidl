@@ -18,24 +18,31 @@
 // the real pipeline — it's what turns "unused permission" into "unused
 // permission on sensitive data", i.e. what makes a finding a priority.
 //
-// KNOWN GAP vs. the design note's central query: graph-dsl v1 has no
-// edge aliases (`edge_pattern` in dsl.pest never binds one) and no
-// `NOT EXISTS`/subquery syntax — `WHERE` only reaches a *node* alias's
-// properties (`property_condition = ident "." ident OP literal`).
-// So today there is no way to write, in this engine's own query
-// language, "a GRANTS edge whose action has no matching ACCESSED edge
-// within 90 days". `@indexed` on `GRANTS.action`/`ACCESSED.action`
-// below is included for readability and future-proofing, but has no
-// effect yet either: `graph-index`'s property index is only ever built
-// from node rows (see `IcebergIndexBuilder::build_property_index`),
-// edge properties aren't indexed at all in v1. Computing the actual
-// unused-permission set today means exporting `GRANTS` and `ACCESSED`
-// rows (two k-hop/pattern queries) and taking the set difference
-// downstream — closer to what spec §7.1/§1.4 already expects for
-// anything past pure traversal. Extending the DSL with edge aliases +
-// an anti-join/NOT EXISTS clause is the natural next step to run this
-// query in-engine; flagging it here rather than pretending the schema
-// alone makes it work.
+// The design note's central query — "a GRANTS edge whose action has no
+// matching ACCESSED edge within the trust window" — now runs in-engine
+// verbatim:
+//
+//   MATCH (w:Workload)-[:ASSUMES]->(r:IAMRole)-[g:GRANTS]->(d:DataStore)
+//   WHERE d.data_class = "sensitive"
+//     AND NOT EXISTS {
+//       MATCH (w)-[a:ACCESSED]->(d)
+//       WHERE a.action = g.action AND a.last_seen >= "2024-05-01T00:00:00Z"
+//     }
+//   RETURN w.workload_id, w.team, r.arn, g.action, d.arn
+//
+// This was originally a known gap (no edge aliases, no NOT EXISTS/
+// anti-join, edge properties not indexed) — closed by an out-of-roadmap
+// DSL extension: edge aliases (`[g:GRANTS]`, single-hop only),
+// `RETURN alias.property`, cross-alias property comparison
+// (`a.action = g.action`), and a correlated `NOT EXISTS` compiled into
+// a distributed anti-join (`graph-query::PlanStep::AntiJoin`). `@indexed`
+// on `GRANTS.action`/`ACCESSED.action` still has no effect — `graph-
+// index`'s property index remains node-only (§5.2) — the anti-join
+// filters edge properties directly rather than through that index.
+// Verified end-to-end across two real partitions in
+// `bin/graph-coordinator/tests/lp_end_to_end.rs` (task LP1). Full
+// decision record: `TASKS.md` ("Extension DSL hors roadmap") and
+// `ARCHITECTURE.md` §6.
 
 schema graph_v1 {
   node Workload {

@@ -3,8 +3,9 @@
 
 use crate::grammar::{DslGrammar, Rule};
 use crate::{
-    ComparisonOp, Direction, DslError, EdgePattern, HopRange, Literal, NodePattern,
-    Parser as DslParser, Pattern, PatternStep, PropertyFilter, Query, WhereCondition,
+    ComparisonOp, Direction, DslError, EdgePattern, ExistsSubquery, HopRange, Literal, NodePattern,
+    Parser as DslParser, Pattern, PatternStep, PropertyFilter, PropertyRef, Query, ReturnItem,
+    WhereCondition,
 };
 use graph_schema::{EdgeType, Label};
 use pest::error::InputLocation;
@@ -131,6 +132,7 @@ fn parse_edge_pattern(pair: Pair<Rule>) -> EdgePattern {
         other => unreachable!("edge_pattern only wraps outgoing_edge/incoming_edge, got {other:?}"),
     };
 
+    let mut alias = None;
     let mut edge_type = None;
     let mut hops = HopRange { min: 1, max: 1 };
 
@@ -139,11 +141,12 @@ fn parse_edge_pattern(pair: Pair<Rule>) -> EdgePattern {
             Rule::edge_detail => {
                 for d in detail.into_inner() {
                     match d.as_rule() {
+                        Rule::edge_alias => alias = Some(d.as_str().to_string()),
                         Rule::ident => edge_type = Some(EdgeType(d.as_str().to_string())),
                         Rule::hop_range => hops = parse_hop_range(d),
-                        other => {
-                            unreachable!("edge_detail only yields ident/hop_range, got {other:?}")
-                        }
+                        other => unreachable!(
+                            "edge_detail only yields edge_alias/ident/hop_range, got {other:?}"
+                        ),
                     }
                 }
             }
@@ -154,6 +157,7 @@ fn parse_edge_pattern(pair: Pair<Rule>) -> EdgePattern {
     }
 
     EdgePattern {
+        alias,
         edge_type,
         direction,
         hops,
@@ -183,18 +187,82 @@ fn parse_where_clause(pair: Pair<Rule>) -> Vec<WhereCondition> {
 }
 
 fn parse_where_condition(pair: Pair<Rule>) -> WhereCondition {
-    let inner = pair
-        .into_inner()
-        .next()
-        .expect("where_condition always wraps property_condition/alias_comparison");
+    let inner = pair.into_inner().next().expect(
+        "where_condition always wraps not_exists_clause/property_property_comparison/\
+         property_condition/alias_comparison",
+    );
 
     match inner.as_rule() {
+        Rule::not_exists_clause => parse_not_exists_clause(inner),
+        Rule::property_property_comparison => parse_property_property_comparison(inner),
         Rule::property_condition => parse_property_condition(inner),
         Rule::alias_comparison => parse_alias_comparison(inner),
         other => unreachable!(
-            "where_condition only wraps property_condition/alias_comparison, got {other:?}"
+            "where_condition only wraps not_exists_clause/property_property_comparison/\
+             property_condition/alias_comparison, got {other:?}"
         ),
     }
+}
+
+fn parse_property_property_comparison(pair: Pair<Rule>) -> WhereCondition {
+    let mut inner = pair.into_inner();
+    let left_alias = inner
+        .next()
+        .expect("property_property_comparison always starts with the left alias ident")
+        .as_str()
+        .to_string();
+    let left_property = inner
+        .next()
+        .expect("property_property_comparison always has a left property ident")
+        .as_str()
+        .to_string();
+    let op = parse_comparison_op(
+        inner
+            .next()
+            .expect("property_property_comparison always has a comparison_op"),
+    );
+    let right_alias = inner
+        .next()
+        .expect("property_property_comparison always has a right alias ident")
+        .as_str()
+        .to_string();
+    let right_property = inner
+        .next()
+        .expect("property_property_comparison always has a right property ident")
+        .as_str()
+        .to_string();
+
+    WhereCondition::PropertyComparison {
+        left: PropertyRef {
+            alias: left_alias,
+            property: left_property,
+        },
+        op,
+        right: PropertyRef {
+            alias: right_alias,
+            property: right_property,
+        },
+    }
+}
+
+fn parse_not_exists_clause(pair: Pair<Rule>) -> WhereCondition {
+    let mut pattern = None;
+    let mut where_conditions = Vec::new();
+
+    for p in pair.into_inner() {
+        match p.as_rule() {
+            Rule::pattern => pattern = Some(parse_pattern(p)),
+            Rule::where_clause => where_conditions = parse_where_clause(p),
+            other => {
+                unreachable!("not_exists_clause only yields pattern/where_clause, got {other:?}")
+            }
+        }
+    }
+
+    WhereCondition::NotExists(ExistsSubquery {
+        pattern: pattern.expect("grammar requires a pattern after NOT EXISTS { MATCH"),
+        where_conditions,
+    })
 }
 
 fn parse_property_condition(pair: Pair<Rule>) -> WhereCondition {
@@ -263,8 +331,20 @@ fn parse_comparison_op(pair: Pair<Rule>) -> ComparisonOp {
     }
 }
 
-fn parse_return_clause(pair: Pair<Rule>) -> Vec<String> {
-    pair.into_inner().map(|p| p.as_str().to_string()).collect()
+fn parse_return_clause(pair: Pair<Rule>) -> Vec<ReturnItem> {
+    pair.into_inner().map(parse_return_item).collect()
+}
+
+fn parse_return_item(pair: Pair<Rule>) -> ReturnItem {
+    let mut inner = pair.into_inner();
+    let alias = inner
+        .next()
+        .expect("return_item always starts with its alias ident")
+        .as_str()
+        .to_string();
+    let property = inner.next().map(|p| p.as_str().to_string());
+
+    ReturnItem { alias, property }
 }
 
 fn parse_literal(pair: Pair<Rule>) -> Literal {
@@ -322,7 +402,13 @@ mod tests {
                 value: Literal::String("Alice".into()),
             }]
         );
-        assert_eq!(query.returns, vec!["p".to_string()]);
+        assert_eq!(
+            query.returns,
+            vec![ReturnItem {
+                alias: "p".into(),
+                property: None
+            }]
+        );
     }
 
     /// *(task D3)* A full chain: typed node, hop-ranged outgoing edge,
@@ -419,7 +505,196 @@ mod tests {
         );
         assert_eq!(
             query.returns,
-            vec!["colleague".to_string(), "o".to_string()]
+            vec![
+                ReturnItem {
+                    alias: "colleague".into(),
+                    property: None
+                },
+                ReturnItem {
+                    alias: "o".into(),
+                    property: None
+                },
+            ]
+        );
+    }
+
+    /// Edge alias (`[g:GRANTS]`) parses into `EdgePattern.alias`.
+    #[test]
+    fn parses_an_edge_alias() {
+        let query = PestParser
+            .parse("MATCH (r:IAMRole)-[g:GRANTS]->(d:DataStore) RETURN g")
+            .expect("valid DSL should parse");
+
+        let PatternStep::Edge(edge) = &query.pattern.steps[1] else {
+            panic!("expected an edge step in the middle");
+        };
+        assert_eq!(edge.alias.as_deref(), Some("g"));
+        assert_eq!(edge.edge_type, Some(EdgeType("GRANTS".into())));
+    }
+
+    /// `RETURN alias.property` parses into a `ReturnItem` with
+    /// `property: Some(..)`, distinct from a bare alias.
+    #[test]
+    fn parses_return_items_with_and_without_a_property() {
+        let query = PestParser
+            .parse("MATCH (w:Workload)-[g:GRANTS]->(d:DataStore) RETURN w, g.action, d.arn")
+            .expect("valid DSL should parse");
+
+        assert_eq!(
+            query.returns,
+            vec![
+                ReturnItem {
+                    alias: "w".into(),
+                    property: None
+                },
+                ReturnItem {
+                    alias: "g".into(),
+                    property: Some("action".into())
+                },
+                ReturnItem {
+                    alias: "d".into(),
+                    property: Some("arn".into())
+                },
+            ]
+        );
+    }
+
+    /// `a.action = g.action` (least-privilege use case) parses as a
+    /// `PropertyComparison`, not a `Property`/`AliasComparison` — both of
+    /// which would be a plausible-but-wrong reading of the same tokens.
+    #[test]
+    fn parses_a_property_to_property_comparison() {
+        let query = PestParser
+            .parse(
+                r#"
+                MATCH (w:Workload)-[a:ACCESSED]->(d:DataStore)
+                WHERE a.action = w.kind
+                RETURN a
+                "#,
+            )
+            .expect("valid DSL should parse");
+
+        assert_eq!(
+            query.where_conditions,
+            vec![WhereCondition::PropertyComparison {
+                left: PropertyRef {
+                    alias: "a".into(),
+                    property: "action".into()
+                },
+                op: ComparisonOp::Eq,
+                right: PropertyRef {
+                    alias: "w".into(),
+                    property: "kind".into()
+                },
+            }]
+        );
+    }
+
+    /// The least-privilege use case's central query, checked all the way
+    /// down to AST shape: edge aliases on both `GRANTS` and `ACCESSED`,
+    /// a correlated `NOT EXISTS` whose inner pattern re-anchors on the
+    /// outer `w`/`d` node aliases (no label/properties on them), and a
+    /// `RETURN` mixing bare aliases with `alias.property` items.
+    #[test]
+    fn parses_the_least_privilege_example_into_the_expected_ast() {
+        let query = PestParser
+            .parse(
+                r#"
+                MATCH (w:Workload)-[:ASSUMES]->(r:IAMRole)-[g:GRANTS]->(d:DataStore)
+                WHERE d.data_class = "sensitive"
+                  AND NOT EXISTS {
+                    MATCH (w)-[a:ACCESSED]->(d)
+                    WHERE a.action = g.action AND a.last_seen >= "2024-05-01T00:00:00Z"
+                  }
+                RETURN w.service, w.team, r.arn, g.action, d.arn
+                "#,
+            )
+            .expect("valid DSL should parse");
+
+        assert_eq!(query.pattern.steps.len(), 5);
+        let PatternStep::Edge(grants) = &query.pattern.steps[3] else {
+            panic!("expected the GRANTS edge step");
+        };
+        assert_eq!(grants.alias.as_deref(), Some("g"));
+
+        assert_eq!(query.where_conditions.len(), 2);
+        assert_eq!(
+            query.where_conditions[0],
+            WhereCondition::Property(
+                "d".into(),
+                PropertyFilter {
+                    property: "data_class".into(),
+                    op: ComparisonOp::Eq,
+                    value: Literal::String("sensitive".into()),
+                }
+            )
+        );
+
+        let WhereCondition::NotExists(subquery) = &query.where_conditions[1] else {
+            panic!("expected a NOT EXISTS condition");
+        };
+        assert_eq!(subquery.pattern.steps.len(), 3);
+        let PatternStep::Node(anchor_w) = &subquery.pattern.steps[0] else {
+            panic!("expected the (w) anchor node");
+        };
+        assert_eq!(anchor_w.alias, "w");
+        assert_eq!(anchor_w.label, None, "re-anchored alias carries no label");
+        assert!(anchor_w.property_filters.is_empty());
+        let PatternStep::Edge(accessed) = &subquery.pattern.steps[1] else {
+            panic!("expected the ACCESSED edge step");
+        };
+        assert_eq!(accessed.alias.as_deref(), Some("a"));
+        assert_eq!(accessed.edge_type, Some(EdgeType("ACCESSED".into())));
+
+        assert_eq!(
+            subquery.where_conditions,
+            vec![
+                WhereCondition::PropertyComparison {
+                    left: PropertyRef {
+                        alias: "a".into(),
+                        property: "action".into()
+                    },
+                    op: ComparisonOp::Eq,
+                    right: PropertyRef {
+                        alias: "g".into(),
+                        property: "action".into()
+                    },
+                },
+                WhereCondition::Property(
+                    "a".into(),
+                    PropertyFilter {
+                        property: "last_seen".into(),
+                        op: ComparisonOp::Gte,
+                        value: Literal::String("2024-05-01T00:00:00Z".into()),
+                    }
+                ),
+            ]
+        );
+
+        assert_eq!(
+            query.returns,
+            vec![
+                ReturnItem {
+                    alias: "w".into(),
+                    property: Some("service".into())
+                },
+                ReturnItem {
+                    alias: "w".into(),
+                    property: Some("team".into())
+                },
+                ReturnItem {
+                    alias: "r".into(),
+                    property: Some("arn".into())
+                },
+                ReturnItem {
+                    alias: "g".into(),
+                    property: Some("action".into())
+                },
+                ReturnItem {
+                    alias: "d".into(),
+                    property: Some("arn".into())
+                },
+            ]
         );
     }
 

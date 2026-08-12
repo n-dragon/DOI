@@ -158,6 +158,22 @@ pub struct NodeRecord {
     pub properties: BTreeMap<String, PropertyValue>,
 }
 
+/// An edge's full property record, retained forward (`EdgeId -> record`)
+/// — the edge-alias counterpart of [`NodeRecord`], for the same reason:
+/// `GetEdgeProperties` (least-privilege-via-telemetry use case's edge
+/// aliases, e.g. `g.action`) needs a way to ask what a traversed
+/// `EdgeId` actually is. Unlike node properties (§5.2), edge properties
+/// are **not** indexed by [`PropertyIndex`] — see `graph-index`'s
+/// builder doc comment for why (the DSL has no way to filter on one
+/// through the property index; `graph-query`'s executors hydrate them
+/// on demand instead, the same pattern `NodeRecord` already established
+/// for `RETURN`/`WHERE` needing a node's actual property values).
+#[derive(Debug, Clone)]
+pub struct EdgeRecord {
+    pub edge_type: EdgeType,
+    pub properties: BTreeMap<String, PropertyValue>,
+}
+
 /// Metadata surfaced verbatim by the `GetIndexStatus` RPC (§8.2).
 #[derive(Debug, Clone)]
 pub struct GenerationMeta {
@@ -174,6 +190,7 @@ pub struct IndexGeneration {
     pub topology: TopologicalIndex,
     pub properties: PropertyIndex,
     pub node_records: HashMap<NodeId, NodeRecord>,
+    pub edge_records: HashMap<EdgeId, EdgeRecord>,
 }
 
 /// Holds the currently-served generation and swaps it atomically once a

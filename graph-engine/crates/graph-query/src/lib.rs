@@ -12,8 +12,16 @@
 //!   next hop. No peer-to-peer message passing (decision recorded in
 //!   spec §7.4). See `distributed_executor`'s doc comment for the
 //!   concrete design and the decisions taken while implementing it.
+//!
+//! Extended for the least-privilege-via-telemetry use case with: edge
+//! aliases (a `Binding` now carries `EdgeId`s as well as `NodeId`s),
+//! label-wide start resolution with no filter (`PlanStep::ResolveAll`),
+//! and a correlated anti-join (`PlanStep::AntiJoin`, compiling
+//! `graph_dsl::WhereCondition::NotExists`) — see each type's doc comment
+//! for the scoping decisions made while adding them.
 
 mod distributed_executor;
+mod filter_eval;
 mod local_executor;
 mod planner;
 
@@ -22,9 +30,9 @@ pub use local_executor::SimpleLocalExecutor;
 pub use planner::NaivePlanner;
 
 use async_trait::async_trait;
-use graph_dsl::Query;
+use graph_dsl::{ComparisonOp, Direction, HopRange, PropertyFilter, Query, ReturnItem};
 use graph_index::{GenerationHandle, PropertyKey, RemoteRef};
-use graph_schema::NodeId;
+use graph_schema::{EdgeId, NodeId};
 use std::collections::HashMap;
 
 /// A query lowered into an ordered sequence of steps (§7.3). Planning is
@@ -33,9 +41,11 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct QueryPlan {
     pub steps: Vec<PlanStep>,
-    /// Aliases to keep in the final projection (`RETURN`) — no reduction,
-    /// no `GROUP BY`: aggregation is out of scope for this engine (§1.3).
-    pub project: Vec<String>,
+    /// What to project per matched row (`RETURN`, §7.1) — a bare alias
+    /// (whole node/edge) or `alias.property` (least-privilege use case).
+    /// No reduction, no `GROUP BY`: aggregation is out of scope for this
+    /// engine (§1.3).
+    pub project: Vec<ReturnItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +58,14 @@ pub enum PlanStep {
         property: String,
         key: PropertyKey,
     },
+    /// *(least-privilege-via-telemetry use case)* Resolve the initial
+    /// binding set with **no** filter at all — every node of `label`,
+    /// e.g. `MATCH (w:Workload)` with no `{...}`. The planner (task
+    /// Q-resolve-all) emits this instead of `ResolveStart` whenever the
+    /// pattern's start node carries a label but no equality filter — a
+    /// full local scan (`node_records` filtered by label) rather than a
+    /// `PropertyIndex` lookup, since there's no value to look up by.
+    ResolveAll { alias: String, label: String },
     /// Expand the pattern via the topological index (§5.1) from
     /// `from_alias` to `to_alias`, `hops.min..=hops.max` hops deep
     /// (§7.1's `*1..3` syntax — a plain `-->` lowers to `min: 1, max: 1`).
@@ -63,10 +81,56 @@ pub enum PlanStep {
         to_alias: String,
         to_label: Option<String>,
         edge_type: Option<String>,
-        direction: graph_dsl::Direction,
-        hops: graph_dsl::HopRange,
-        filters: Vec<graph_dsl::PropertyFilter>,
+        direction: Direction,
+        hops: HopRange,
+        filters: Vec<PropertyFilter>,
+        /// *(least-privilege-via-telemetry use case)* Binds the specific
+        /// edge traversed (e.g. `[g:GRANTS]`) — only ever `Some` when
+        /// `hops == {1,1}` (D7-D9 rejects an alias on a variable-length
+        /// hop, see `dsl.pest`'s `edge_detail` doc comment).
+        edge_alias: Option<String>,
     },
+    /// *(least-privilege-via-telemetry use case)* Compiles
+    /// `graph_dsl::WhereCondition::NotExists` — see [`AntiJoinStep`].
+    AntiJoin(AntiJoinStep),
+}
+
+/// The correlated existence check `NOT EXISTS { MATCH (from)-[edge]->(to)
+/// WHERE ... }` compiles into (task Q-not-exists). `from_alias`/
+/// `to_alias` must already be bound by prior plan steps (the validator,
+/// D7-D9, guarantees this at the DSL level). Filters a frontier down to
+/// the bindings for which **no** matching edge satisfies every
+/// condition — i.e. the survivors are exactly where `NOT EXISTS` holds.
+///
+/// Split into two condition buckets rather than one, mirroring the two
+/// shapes `graph_dsl::WhereCondition::PropertyComparison` can produce
+/// inside a subquery: a literal is already fully resolved and travels
+/// with the plan; a reference to an *outer* bound alias's property
+/// (`a.action = g.action`) is **not** resolved yet — its value varies
+/// per binding (different rows can have bound a different `g` edge with
+/// a different `action`), so it can only be resolved once the actual
+/// frontier is in hand, right before dispatch
+/// (`ScatterGatherExecutor::execute_anti_join`, task Q6-antijoin) —
+/// `LocalExecutor`/the wire protocol only ever see the fully-resolved
+/// form (`literal_conditions`-shaped).
+#[derive(Debug, Clone)]
+pub struct AntiJoinStep {
+    pub from_alias: String,
+    pub to_alias: String,
+    /// Always `Outgoing` — the validator rejects `<-` inside
+    /// `NOT EXISTS` (see `ValidationError::NotExistsMustBeOutgoing`'s
+    /// doc comment for why: edge-record ownership follows the source,
+    /// which must be `from_alias` for a purely local check to work).
+    /// Kept as a field rather than assumed for symmetry with
+    /// `PlanStep::ExpandHop` and in case that restriction is ever lifted.
+    pub direction: Direction,
+    pub edge_alias: Option<String>,
+    pub edge_type: Option<String>,
+    pub literal_conditions: Vec<PropertyFilter>,
+    /// `(candidate_edge_property, op, outer_alias.outer_property)` —
+    /// resolved into `literal_conditions`-shaped filters, per binding,
+    /// before any RPC carrying this step is sent.
+    pub outer_conditions: Vec<(String, ComparisonOp, graph_dsl::PropertyRef)>,
 }
 
 /// Turns a validated [`Query`] into a [`QueryPlan`]. Concrete cost-based
@@ -76,9 +140,28 @@ pub trait Planner {
     fn plan(&self, query: &Query) -> QueryPlan;
 }
 
-/// One partial match in progress: alias -> bound node, threaded through
-/// `ExpandHop` steps and across partition boundaries during scatter-gather.
-pub type Binding = HashMap<String, NodeId>;
+/// One partial match in progress: alias -> bound node/edge, threaded
+/// through `ExpandHop`/`AntiJoin` steps and across partition boundaries
+/// during scatter-gather. Node and edge aliases are tracked separately
+/// (an alias is always exclusively one or the other, fixed by the
+/// pattern) rather than in one map of a sum type — most call sites only
+/// ever touch `nodes`; `edges` stays empty for the large majority of
+/// bindings that never traverse an aliased edge.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Binding {
+    pub nodes: HashMap<String, NodeId>,
+    pub edges: HashMap<String, EdgeId>,
+}
+
+impl Binding {
+    /// A binding with exactly one node bound — the common case building
+    /// up from `ResolveStart`/`ResolveAll`.
+    pub fn from_node(alias: impl Into<String>, node: NodeId) -> Self {
+        let mut binding = Binding::default();
+        binding.nodes.insert(alias.into(), node);
+        binding
+    }
+}
 
 /// The set of in-progress bindings passed between coordinator and
 /// partitions at each hop of a scatter-gather round (§7.4). Bindings whose
@@ -120,12 +203,37 @@ pub trait LocalExecutor {
         step: &PlanStep,
     ) -> Result<Vec<Binding>, ExecutionError>;
 
+    /// *(least-privilege-via-telemetry use case)* Companion to
+    /// `resolve_start` for `PlanStep::ResolveAll` — every local node of
+    /// a label, no property lookup.
+    async fn resolve_all(
+        &self,
+        index: &GenerationHandle,
+        step: &PlanStep,
+    ) -> Result<Vec<Binding>, ExecutionError>;
+
     async fn expand_hop(
         &self,
         index: &GenerationHandle,
         step: &PlanStep,
         frontier: &[Binding],
     ) -> Result<Frontier, ExecutionError>;
+
+    /// *(least-privilege-via-telemetry use case)* Evaluates
+    /// `PlanStep::AntiJoin` against a frontier that's already local to
+    /// this partition (every binding's `from_alias` node is owned here —
+    /// the caller, `ScatterGatherExecutor`, groups by partition the same
+    /// way it does for `expand_hop`). `conditions` are always fully
+    /// resolved `PropertyFilter`s by this point — see `AntiJoinStep`'s
+    /// doc comment for where the resolution happens. Returns the
+    /// surviving bindings (those for which `NOT EXISTS` holds).
+    async fn check_anti_join(
+        &self,
+        index: &GenerationHandle,
+        step: &AntiJoinStep,
+        conditions: &[PropertyFilter],
+        frontier: &[Binding],
+    ) -> Result<Vec<Binding>, ExecutionError>;
 }
 
 // The coordinator's scatter-gather loop (§7.4) is `ScatterGatherExecutor`

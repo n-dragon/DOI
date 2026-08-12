@@ -1383,7 +1383,9 @@ name = "graph-coordinator"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
+ "arrow-schema",
  "async-trait",
+ "chrono",
  "futures",
  "graph-cluster",
  "graph-dsl",
@@ -1494,6 +1496,7 @@ name = "graph-query"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "futures",
  "graph-cluster",
  "graph-dsl",

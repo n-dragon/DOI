@@ -27,7 +27,29 @@ service GraphService {
 // scatter-gather round (spec §7.4). Not exposed to end clients.
 service PartitionService {
   rpc ResolveStart(ResolveStartRequest) returns (stream Binding);
+  // *(least-privilege-via-telemetry use case)* Start-node resolution
+  // with no equality filter at all — "every node of this label", e.g.
+  // `MATCH (w:Workload)` with no `{...}` — a full local scan rather than
+  // a property-index lookup. A separate RPC (not `ResolveStart` with an
+  // empty key) because the two have genuinely different execution paths
+  // on the partition side (`PropertyIndex::lookup_eq` vs. iterating
+  // `node_records`), not just a different wire shape.
+  rpc ResolveAll(ResolveAllRequest) returns (stream Binding);
   rpc ExpandHop(ExpandHopRequest) returns (stream Binding);
+  // *(least-privilege-via-telemetry use case)* The correlated
+  // `NOT EXISTS { MATCH (from)-[edge:TYPE]->(to) WHERE ... }` anti-join
+  // (`graph-dsl`'s `ExistsSubquery`, scoped to a single hop between two
+  // already-bound nodes — see that type's doc comment). Evaluated
+  // locally by whichever partition owns `from_alias`'s node, since an
+  // edge's record is owned by its source's partition (`graph-index`'s
+  // `edge_records`, same rule `ExpandHop`'s adjacency already follows).
+  // `conditions` are always fully resolved literals by the time they
+  // reach here — any condition that referenced an *outer* bound edge
+  // alias (`a.action = g.action`) is resolved to a concrete value by
+  // the coordinator (via `GetEdgeProperties` on `g`) before this call,
+  // so a partition never needs to reach across to another partition
+  // just to evaluate one anti-join.
+  rpc CheckAntiJoin(CheckAntiJoinRequest) returns (CheckAntiJoinResponse);
   // Reuses GraphService's message types — the coordinator's own
   // GetIndexStatus (CO3) just relays this partition's GenerationMeta
   // verbatim, mono-partition v1 having exactly one to relay.
@@ -38,6 +60,10 @@ service PartitionService {
   // needs anything but ids, so this stays a separate RPC rather than
   // being folded into ResolveStart/ExpandHop.
   rpc GetNodeProperties(GetNodePropertiesRequest) returns (GetNodePropertiesResponse);
+  // Edge-alias counterpart of `GetNodeProperties` (least-privilege
+  // use case's `g.action`) — same point-lookup-by-id shape, against
+  // `graph-index`'s `edge_records` instead of `node_records`.
+  rpc GetEdgeProperties(GetEdgePropertiesRequest) returns (GetEdgePropertiesResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
@@ -47,12 +73,19 @@ message ExecuteQueryRequest {
 
 message QueryResult {
   // NodeId per alias, bit-cast into int64_value — kept for callers that
-  // only need identity (e.g. joining across multiple queries).
+  // only need identity (e.g. joining across multiple queries). Edge
+  // aliases are not represented here (an EdgeId is meaningless to a
+  // caller on its own) — only in `edge_properties` below.
   map<string, Value> projection = 1;
-  // The actual property record backing each alias in `projection`,
-  // hydrated via GetNodeProperties — what a human-facing client (like
-  // the viewer) renders instead of a bare internal id.
+  // The actual property record backing each *node* alias in
+  // `projection`, hydrated via GetNodeProperties — what a human-facing
+  // client (like the viewer) renders instead of a bare internal id.
   map<string, NodeProperties> properties = 2;
+  // The property record backing each *edge* alias RETURN'd or
+  // referenced by the query (least-privilege use case's `g.action`),
+  // hydrated via GetEdgeProperties. Keyed by the edge alias, same as
+  // `properties` is keyed by node alias.
+  map<string, EdgeProperties> edge_properties = 3;
 }
 
 message GetNodePropertiesRequest {
@@ -65,6 +98,19 @@ message GetNodePropertiesResponse {
 
 message NodeProperties {
   string label = 1;
+  map<string, Value> fields = 2;
+}
+
+message GetEdgePropertiesRequest {
+  repeated uint64 edge_ids = 1;
+}
+
+message GetEdgePropertiesResponse {
+  map<uint64, EdgeProperties> properties = 1;
+}
+
+message EdgeProperties {
+  string edge_type = 1;
   map<string, Value> fields = 2;
 }
 
@@ -120,6 +166,11 @@ message ResolveStartRequest {
   Value key = 4;
 }
 
+message ResolveAllRequest {
+  string alias = 1;
+  string label = 2;
+}
+
 message ExpandHopRequest {
   repeated Binding frontier = 1;
   string from_alias = 2;
@@ -134,6 +185,12 @@ message ExpandHopRequest {
   uint32 hop_min = 7;
   uint32 hop_max = 8;
   repeated PropertyFilter filters = 9;
+  // Empty = the pattern left this hop's edge unaliased. Non-empty only
+  // ever appears together with hop_min == hop_max == 1 — the planner
+  // (task Q-edge-alias) never emits an aliased multi-hop step, and the
+  // validator (D7-D9) rejects one at parse time (see `dsl.pest`'s
+  // `edge_detail` doc comment for why).
+  string edge_alias = 10;
 }
 
 message PropertyFilter {
@@ -153,4 +210,33 @@ enum ComparisonOp {
 
 message Binding {
   map<string, uint64> node_ids_by_alias = 1;
+  // Populated only for aliases bound by an aliased single-hop edge
+  // (`[g:GRANTS]`) — most bindings carry no entries here at all.
+  map<string, uint64> edge_ids_by_alias = 2;
+}
+
+message CheckAntiJoinRequest {
+  repeated Binding frontier = 1;
+  // Both already bound node aliases from the outer pattern — see
+  // `graph_dsl::ExistsSubquery`'s doc comment for the "re-anchor, don't
+  // introduce" scoping this assumes.
+  string from_alias = 2;
+  string to_alias = 3;
+  // Empty = the NOT EXISTS clause's edge is unaliased.
+  string edge_alias = 4;
+  string edge_type = 5;
+  bool incoming = 6;
+  // AND-combined, evaluated against the *candidate* (inner) edge found
+  // between from_alias's and to_alias's bound nodes — every operand
+  // already resolved to a literal by the coordinator (see this RPC's
+  // doc comment on `PartitionService`).
+  repeated PropertyFilter conditions = 7;
+}
+
+message CheckAntiJoinResponse {
+  // Indices into the request's `frontier` for bindings where NOT EXISTS
+  // holds (no candidate edge satisfied every condition) — i.e. the
+  // survivors, ready to flow into the next plan step exactly like an
+  // ExpandHop response's bindings would.
+  repeated uint32 surviving_indices = 1;
 }

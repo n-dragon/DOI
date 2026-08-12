@@ -22,11 +22,11 @@
 //! same as before.
 
 use crate::{
-    AdjacencyEntry, GenerationMeta, IndexBuilder, IndexGeneration, LocalIdx, NodeRecord,
-    PartitionId, PropertyIndex, PropertyKey, RebuildError, RemoteRef, TopologicalIndex,
+    AdjacencyEntry, EdgeRecord, GenerationMeta, IndexBuilder, IndexGeneration, LocalIdx,
+    NodeRecord, PartitionId, PropertyIndex, PropertyKey, RebuildError, RemoteRef, TopologicalIndex,
 };
 use futures::StreamExt;
-use graph_schema::{partitioning::partition_of, EdgeType, Label, NodeId, Schema};
+use graph_schema::{partitioning::partition_of, EdgeId, EdgeType, Label, NodeId, Schema};
 use graph_storage::{
     edge_table_name, node_table_name, EdgeRow, IcebergReader, NodeRow, PropertyValue,
 };
@@ -123,6 +123,28 @@ impl<R: IcebergReader> IndexBuilder for IcebergIndexBuilder<R> {
             })
             .collect();
 
+        // An edge's record is owned by whichever partition owns its
+        // *source* — the same criterion `build_csr` already uses to
+        // decide whether an edge belongs in this partition's outgoing
+        // adjacency at all (`id_to_local.get(&owner)`, `owner == src`
+        // for the outgoing direction). Consistent with that: a
+        // `GetEdgeProperties`-style lookup for a given `EdgeId` only
+        // ever needs to reach the partition that would have handed that
+        // id out via `ExpandHop`/`ResolveStart` in the first place.
+        let edge_records: HashMap<EdgeId, EdgeRecord> = edges
+            .into_iter()
+            .filter(|(_, row)| partition_of(row.src, self.n_partitions) == partition.0)
+            .map(|(edge_type, row)| {
+                (
+                    row.id,
+                    EdgeRecord {
+                        edge_type,
+                        properties: row.properties,
+                    },
+                )
+            })
+            .collect();
+
         Ok(IndexGeneration {
             meta: GenerationMeta {
                 partition,
@@ -137,6 +159,7 @@ impl<R: IcebergReader> IndexBuilder for IcebergIndexBuilder<R> {
             topology,
             properties,
             node_records,
+            edge_records,
         })
     }
 }
@@ -593,6 +616,96 @@ mod tests {
         assert!(!gen.node_records.contains_key(&NodeId(999)));
     }
 
+    /// `edge_records` retains each *locally-owned* edge's full property
+    /// set, forward-keyed by id — what a `GetEdgeProperties`-style
+    /// lookup reads from. "Locally-owned" here (mono-partition,
+    /// `n_partitions: 1`) is every edge, so this also exercises the
+    /// simple case before the cross-partition one below.
+    #[tokio::test]
+    async fn edge_records_hold_the_full_property_set_per_locally_owned_edge() {
+        let mut alice_knows_bob = edge(100, 1, 2);
+        alice_knows_bob
+            .properties
+            .insert("since".to_string(), PropertyValue::Int64(2020));
+
+        let reader = FakeReader {
+            nodes: Mutex::new(HashMap::from([(
+                "Person".to_string(),
+                vec![node(1, "Alice", 1985), node(2, "Bob", 1990)],
+            )])),
+            edges: Mutex::new(HashMap::from([(
+                "KNOWS".to_string(),
+                vec![alice_knows_bob],
+            )])),
+        };
+        let builder = IcebergIndexBuilder::new(reader, small_social_schema(), 1);
+        let gen = builder
+            .build(PartitionId(0), &[Label("Person".to_string())])
+            .await
+            .expect("build should succeed");
+
+        let record = gen
+            .edge_records
+            .get(&EdgeId(100))
+            .expect("edge 100 should have a record");
+        assert_eq!(record.edge_type.0, "KNOWS");
+        assert_eq!(
+            record.properties.get("since"),
+            Some(&PropertyValue::Int64(2020))
+        );
+
+        assert!(!gen.edge_records.contains_key(&EdgeId(999)));
+    }
+
+    /// *(edge ownership)* An edge's record follows its *source* node's
+    /// partition — the same criterion `build_csr` already uses for
+    /// outgoing adjacency. A partition that doesn't own the edge's
+    /// source never sees that edge's record at all, even though the
+    /// edge itself is still correctly represented as a `RemoteRef` from
+    /// the owning partition's perspective (see the `remote_edges_are_
+    /// flagged_as_remote_ref_across_partitions` test above).
+    #[tokio::test]
+    async fn edge_records_follow_the_source_nodes_partition() {
+        let n_partitions = 4u32;
+        let mut local_id = None;
+        let mut remote_id = None;
+        for candidate in 1..10_000u64 {
+            let p = partition_of(NodeId(candidate), n_partitions);
+            if p == 0 && local_id.is_none() {
+                local_id = Some(candidate);
+            } else if p != 0 && remote_id.is_none() {
+                remote_id = Some(candidate);
+            }
+            if local_id.is_some() && remote_id.is_some() {
+                break;
+            }
+        }
+        let local_id = local_id.expect("found an id hashing to partition 0");
+        let remote_id = remote_id.expect("found an id hashing to a non-zero partition");
+
+        // The edge's source is the *remote* node — this partition (0)
+        // doesn't own it, so it must not retain the edge's record even
+        // though it does scan the edge row (every replica scans every
+        // row, §4.1).
+        let reader = FakeReader {
+            nodes: Mutex::new(HashMap::from([(
+                "Person".to_string(),
+                vec![node(local_id, "Alice", 1985), node(remote_id, "Bob", 1990)],
+            )])),
+            edges: Mutex::new(HashMap::from([(
+                "KNOWS".to_string(),
+                vec![edge(100, remote_id, local_id)],
+            )])),
+        };
+        let builder = IcebergIndexBuilder::new(reader, small_social_schema(), n_partitions);
+        let gen = builder
+            .build(PartitionId(0), &[Label("Person".to_string())])
+            .await
+            .expect("build should succeed");
+
+        assert!(!gen.edge_records.contains_key(&EdgeId(100)));
+    }
+
     /// *(task IX8)* A query that has already `acquire()`d a generation
     /// keeps seeing it consistently after a concurrent `swap()` — no
     /// torn reads, no panic. The old generation isn't dropped until this
@@ -616,6 +729,7 @@ mod tests {
             topology: build_topology(PartitionId(0), &[], &[], 1),
             properties: build_property_index(&small_social_schema(), &[]),
             node_records: HashMap::new(),
+            edge_records: HashMap::new(),
         };
         handle.swap(new_generation);
 

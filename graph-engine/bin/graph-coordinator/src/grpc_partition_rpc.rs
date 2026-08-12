@@ -11,16 +11,17 @@
 use async_trait::async_trait;
 use graph_cluster::ReplicaEndpoint;
 use graph_dsl::{ComparisonOp, Direction, Literal, PropertyFilter};
-use graph_index::{NodeRecord, PropertyKey};
+use graph_index::{EdgeRecord, NodeRecord, PropertyKey};
 use graph_proto::v1::partition_service_client::PartitionServiceClient;
 use graph_proto::v1::value::Kind;
 use graph_proto::v1::{
-    Binding as ProtoBinding, ComparisonOp as ProtoComparisonOp, ExpandHopRequest,
-    GetNodePropertiesRequest, PropertyFilter as ProtoPropertyFilter, ResolveStartRequest,
+    Binding as ProtoBinding, CheckAntiJoinRequest, ComparisonOp as ProtoComparisonOp,
+    ExpandHopRequest, GetEdgePropertiesRequest, GetNodePropertiesRequest,
+    PropertyFilter as ProtoPropertyFilter, ResolveAllRequest, ResolveStartRequest,
     Value as ProtoValue,
 };
-use graph_query::{Binding, ExecutionError, Frontier, PartitionRpc, PlanStep};
-use graph_schema::NodeId;
+use graph_query::{AntiJoinStep, Binding, ExecutionError, Frontier, PartitionRpc, PlanStep};
+use graph_schema::{EdgeId, NodeId};
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use tokio::sync::Mutex;
@@ -123,6 +124,31 @@ impl PartitionRpc for GrpcPartitionRpc {
         Ok(bindings.iter().map(proto_binding_to_binding).collect())
     }
 
+    /// *(least-privilege-via-telemetry use case)*
+    async fn resolve_all(
+        &self,
+        replica: &ReplicaEndpoint,
+        step: &PlanStep,
+    ) -> Result<Vec<Binding>, ExecutionError> {
+        let PlanStep::ResolveAll { alias, label } = step else {
+            return Err(ExecutionError::Rpc(
+                "resolve_all called with a non-ResolveAll step".to_string(),
+            ));
+        };
+
+        let mut client = self.client(replica).await?;
+        let request = ResolveAllRequest {
+            alias: alias.clone(),
+            label: label.clone(),
+        };
+        let stream = client
+            .resolve_all(request)
+            .await
+            .map_err(|e| ExecutionError::Rpc(e.to_string()))?;
+        let bindings = collect(stream).await?;
+        Ok(bindings.iter().map(proto_binding_to_binding).collect())
+    }
+
     async fn expand_hop(
         &self,
         replica: &ReplicaEndpoint,
@@ -137,6 +163,7 @@ impl PartitionRpc for GrpcPartitionRpc {
             direction,
             hops,
             filters,
+            edge_alias,
         } = step
         else {
             return Err(ExecutionError::Rpc(
@@ -155,6 +182,7 @@ impl PartitionRpc for GrpcPartitionRpc {
             hop_min: hops.min,
             hop_max: hops.max,
             filters: filters.iter().map(property_filter_to_proto).collect(),
+            edge_alias: edge_alias.clone().unwrap_or_default(),
         };
         let stream = client
             .expand_hop(request)
@@ -175,6 +203,37 @@ impl PartitionRpc for GrpcPartitionRpc {
         })
     }
 
+    /// *(least-privilege-via-telemetry use case)*
+    async fn check_anti_join(
+        &self,
+        replica: &ReplicaEndpoint,
+        step: &AntiJoinStep,
+        conditions: &[PropertyFilter],
+        frontier: &[Binding],
+    ) -> Result<Vec<Binding>, ExecutionError> {
+        let mut client = self.client(replica).await?;
+        let request = CheckAntiJoinRequest {
+            frontier: frontier.iter().map(binding_to_proto).collect(),
+            from_alias: step.from_alias.clone(),
+            to_alias: step.to_alias.clone(),
+            edge_alias: step.edge_alias.clone().unwrap_or_default(),
+            edge_type: step.edge_type.clone().unwrap_or_default(),
+            incoming: matches!(step.direction, Direction::Incoming),
+            conditions: conditions.iter().map(property_filter_to_proto).collect(),
+        };
+        let response = client
+            .check_anti_join(request)
+            .await
+            .map_err(|e| ExecutionError::Rpc(e.to_string()))?
+            .into_inner();
+
+        Ok(response
+            .surviving_indices
+            .into_iter()
+            .filter_map(|i| frontier.get(i as usize).cloned())
+            .collect())
+    }
+
     async fn get_node_properties(
         &self,
         replica: &ReplicaEndpoint,
@@ -193,6 +252,28 @@ impl PartitionRpc for GrpcPartitionRpc {
             .properties
             .into_iter()
             .map(|(id, props)| (NodeId(id), proto_node_properties_to_record(props)))
+            .collect())
+    }
+
+    /// *(least-privilege-via-telemetry use case)*
+    async fn get_edge_properties(
+        &self,
+        replica: &ReplicaEndpoint,
+        ids: &[EdgeId],
+    ) -> Result<HashMap<EdgeId, EdgeRecord>, ExecutionError> {
+        let mut client = self.client(replica).await?;
+        let response = client
+            .get_edge_properties(GetEdgePropertiesRequest {
+                edge_ids: ids.iter().map(|id| id.0).collect(),
+            })
+            .await
+            .map_err(|e| ExecutionError::Rpc(e.to_string()))?
+            .into_inner();
+
+        Ok(response
+            .properties
+            .into_iter()
+            .map(|(id, props)| (EdgeId(id), proto_edge_properties_to_record(props)))
             .collect())
     }
 }
@@ -251,6 +332,12 @@ fn property_filter_to_proto(filter: &PropertyFilter) -> ProtoPropertyFilter {
 fn binding_to_proto(binding: &Binding) -> ProtoBinding {
     ProtoBinding {
         node_ids_by_alias: binding
+            .nodes
+            .iter()
+            .map(|(alias, id)| (alias.clone(), id.0))
+            .collect(),
+        edge_ids_by_alias: binding
+            .edges
             .iter()
             .map(|(alias, id)| (alias.clone(), id.0))
             .collect(),
@@ -258,11 +345,18 @@ fn binding_to_proto(binding: &Binding) -> ProtoBinding {
 }
 
 fn proto_binding_to_binding(proto: &ProtoBinding) -> Binding {
-    proto
-        .node_ids_by_alias
-        .iter()
-        .map(|(alias, id)| (alias.clone(), NodeId(*id)))
-        .collect()
+    Binding {
+        nodes: proto
+            .node_ids_by_alias
+            .iter()
+            .map(|(alias, id)| (alias.clone(), NodeId(*id)))
+            .collect::<HashMap<_, _>>(),
+        edges: proto
+            .edge_ids_by_alias
+            .iter()
+            .map(|(alias, id)| (alias.clone(), EdgeId(*id)))
+            .collect::<HashMap<_, _>>(),
+    }
 }
 
 /// Mirrors `bin/graph-partition-node/src/service.rs`'s
@@ -277,6 +371,20 @@ fn proto_node_properties_to_record(proto: graph_proto::v1::NodeProperties) -> No
         .collect();
     NodeRecord {
         label: graph_schema::Label(proto.label),
+        properties,
+    }
+}
+
+/// Edge-alias counterpart of `proto_node_properties_to_record`
+/// (least-privilege use case's `g.action`).
+fn proto_edge_properties_to_record(proto: graph_proto::v1::EdgeProperties) -> EdgeRecord {
+    let properties: BTreeMap<String, graph_storage::PropertyValue> = proto
+        .fields
+        .into_iter()
+        .filter_map(|(name, value)| proto_value_to_property_value(value).map(|v| (name, v)))
+        .collect();
+    EdgeRecord {
+        edge_type: graph_schema::EdgeType(proto.edge_type),
         properties,
     }
 }

@@ -22,6 +22,8 @@ tracing.workspace = true
 [dev-dependencies]
 iceberg = "0.10.1"
 arrow-array = "58"
+arrow-schema = "58"
 parquet = "58"
 tempfile = "3"
+chrono.workspace = true
 graph-partition-node = { path = "../graph-partition-node" }

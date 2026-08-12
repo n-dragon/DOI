@@ -163,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bindings.len()
     );
     for binding in &bindings {
-        let node_id = binding[return_alias];
+        let node_id = binding.nodes[&return_alias.alias];
         match resource_names.get(&(node_id.0 as i64)) {
             Some(name) => println!("   - {name} (NodeId({}))", node_id.0),
             None => println!("   - NodeId({})", node_id.0),

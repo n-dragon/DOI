@@ -3,6 +3,11 @@
 //! translation layer — the actual traversal logic lives in
 //! `graph_query::SimpleLocalExecutor`, this just marshals wire types to
 //! and from it.
+//!
+//! Extended for the least-privilege-via-telemetry use case with
+//! `resolve_all`, `check_anti_join`, and `get_edge_properties` handlers
+//! — the partition-side counterparts of `graph_query::LocalExecutor`'s
+//! own extensions.
 
 // tonic::Status (176 bytes) is the framework's standard RPC error type -
 // every handler in a tonic service returns Result<_, Status> by
@@ -11,19 +16,22 @@
 #![allow(clippy::result_large_err)]
 
 use graph_dsl::{ComparisonOp, Direction, HopRange, Literal, PropertyFilter};
-use graph_index::{GenerationHandle, NodeRecord, PartitionId, PropertyKey};
+use graph_index::{EdgeRecord, GenerationHandle, NodeRecord, PartitionId, PropertyKey};
 use graph_observability::metrics;
 use graph_proto::v1::partition_service_server::PartitionService;
 use graph_proto::v1::value::Kind;
 use graph_proto::v1::{
-    health_check_response, Binding as ProtoBinding, ComparisonOp as ProtoComparisonOp,
-    ExpandHopRequest, GetIndexStatusRequest, GetNodePropertiesRequest, GetNodePropertiesResponse,
-    HealthCheckRequest, HealthCheckResponse, IndexStatusResponse, NodeProperties,
-    PropertyFilter as ProtoPropertyFilter, ResolveStartRequest, Value as ProtoValue,
+    health_check_response, Binding as ProtoBinding, CheckAntiJoinRequest, CheckAntiJoinResponse,
+    ComparisonOp as ProtoComparisonOp, EdgeProperties, ExpandHopRequest, GetEdgePropertiesRequest,
+    GetEdgePropertiesResponse, GetIndexStatusRequest, GetNodePropertiesRequest,
+    GetNodePropertiesResponse, HealthCheckRequest, HealthCheckResponse, IndexStatusResponse,
+    NodeProperties, PropertyFilter as ProtoPropertyFilter, ResolveAllRequest, ResolveStartRequest,
+    Value as ProtoValue,
 };
-use graph_query::{Binding, LocalExecutor, PlanStep, SimpleLocalExecutor};
-use graph_schema::NodeId;
+use graph_query::{AntiJoinStep, Binding, LocalExecutor, PlanStep, SimpleLocalExecutor};
+use graph_schema::{EdgeId, NodeId};
 use graph_storage::PropertyValue;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
@@ -48,6 +56,7 @@ impl PartitionServiceImpl {
 #[tonic::async_trait]
 impl PartitionService for PartitionServiceImpl {
     type ResolveStartStream = BindingStream;
+    type ResolveAllStream = BindingStream;
     type ExpandHopStream = BindingStream;
 
     /// *(task PN3)* Delegates to `LocalExecutor::resolve_start`.
@@ -69,6 +78,26 @@ impl PartitionService for PartitionServiceImpl {
 
         let bindings = SimpleLocalExecutor
             .resolve_start(&self.generation, &step)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(bindings_to_stream(bindings)))
+    }
+
+    /// *(least-privilege-via-telemetry use case)* Delegates to
+    /// `LocalExecutor::resolve_all`.
+    async fn resolve_all(
+        &self,
+        request: Request<ResolveAllRequest>,
+    ) -> Result<Response<Self::ResolveAllStream>, Status> {
+        let req = request.into_inner();
+        let step = PlanStep::ResolveAll {
+            alias: req.alias,
+            label: req.label,
+        };
+
+        let bindings = SimpleLocalExecutor
+            .resolve_all(&self.generation, &step)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -103,6 +132,7 @@ impl PartitionService for PartitionServiceImpl {
                 max: req.hop_max,
             },
             filters,
+            edge_alias: (!req.edge_alias.is_empty()).then_some(req.edge_alias),
         };
 
         let start = Instant::now();
@@ -134,6 +164,64 @@ impl PartitionService for PartitionServiceImpl {
             .chain(result.remote.into_iter().map(|(_, binding)| binding))
             .collect();
         Ok(Response::new(bindings_to_stream(bindings)))
+    }
+
+    /// *(least-privilege-via-telemetry use case)* Delegates to
+    /// `LocalExecutor::check_anti_join` — `req.conditions` are always
+    /// already fully resolved literals by the time they arrive here (see
+    /// `graph_query::distributed_executor`'s module doc comment).
+    /// Unary, not streaming: the response is just which of the request's
+    /// `frontier` entries survived, by index, not a re-serialization of
+    /// the bindings themselves.
+    async fn check_anti_join(
+        &self,
+        request: Request<CheckAntiJoinRequest>,
+    ) -> Result<Response<CheckAntiJoinResponse>, Status> {
+        let req = request.into_inner();
+        let frontier: Vec<Binding> = req.frontier.iter().map(proto_binding_to_binding).collect();
+        let conditions = req
+            .conditions
+            .into_iter()
+            .map(proto_filter_to_property_filter)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let step = AntiJoinStep {
+            from_alias: req.from_alias,
+            to_alias: req.to_alias,
+            direction: if req.incoming {
+                Direction::Incoming
+            } else {
+                Direction::Outgoing
+            },
+            edge_alias: (!req.edge_alias.is_empty()).then_some(req.edge_alias),
+            edge_type: (!req.edge_type.is_empty()).then_some(req.edge_type),
+            // Unused by `LocalExecutor::check_anti_join` (it takes the
+            // already-resolved `conditions` slice as its own parameter,
+            // see this RPC's doc comment) — only the routing fields
+            // above matter for this step value.
+            literal_conditions: Vec::new(),
+            outer_conditions: Vec::new(),
+        };
+
+        let survivors = SimpleLocalExecutor
+            .check_anti_join(&self.generation, &step, &conditions, &frontier)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        // Indices into the *request's* frontier, per the RPC's contract
+        // (`CheckAntiJoinResponse.surviving_indices`'s doc comment) —
+        // `SimpleLocalExecutor::check_anti_join` returns the surviving
+        // `Binding`s themselves, not indices, so this maps back by exact
+        // equality (`Binding: PartialEq`). Frontier entries are never
+        // literally duplicated within one request (each corresponds to a
+        // distinct upstream match), so this is unambiguous.
+        let surviving_indices = frontier
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| survivors.contains(b).then_some(i as u32))
+            .collect();
+
+        Ok(Response::new(CheckAntiJoinResponse { surviving_indices }))
     }
 
     async fn get_index_status(
@@ -182,6 +270,33 @@ impl PartitionService for PartitionServiceImpl {
         Ok(Response::new(GetNodePropertiesResponse { properties }))
     }
 
+    /// Edge-alias counterpart of `get_node_properties` (least-privilege
+    /// use case's `g.action`) — same point-lookup-by-id shape, against
+    /// `edge_records` instead of `node_records`. Only ever finds an edge
+    /// whose *source* this partition owns (`graph-index`'s builder) —
+    /// silently skipped otherwise, same "not every id resolves, that's
+    /// fine" posture as `get_node_properties`.
+    async fn get_edge_properties(
+        &self,
+        request: Request<GetEdgePropertiesRequest>,
+    ) -> Result<Response<GetEdgePropertiesResponse>, Status> {
+        let generation = self.generation.acquire();
+        let req = request.into_inner();
+
+        let properties = req
+            .edge_ids
+            .into_iter()
+            .filter_map(|id| {
+                generation
+                    .edge_records
+                    .get(&EdgeId(id))
+                    .map(|record| (id, edge_record_to_proto(record)))
+            })
+            .collect();
+
+        Ok(Response::new(GetEdgePropertiesResponse { properties }))
+    }
+
     async fn health_check(
         &self,
         _request: Request<HealthCheckRequest>,
@@ -195,6 +310,17 @@ impl PartitionService for PartitionServiceImpl {
 fn node_record_to_proto(record: &NodeRecord) -> NodeProperties {
     NodeProperties {
         label: record.label.0.clone(),
+        fields: record
+            .properties
+            .iter()
+            .filter_map(|(name, value)| property_value_to_proto(value).map(|v| (name.clone(), v)))
+            .collect(),
+    }
+}
+
+fn edge_record_to_proto(record: &EdgeRecord) -> EdgeProperties {
+    EdgeProperties {
+        edge_type: record.edge_type.0.clone(),
         fields: record
             .properties
             .iter()
@@ -229,6 +355,12 @@ fn bindings_to_stream(bindings: Vec<Binding>) -> BindingStream {
 fn binding_to_proto(binding: &Binding) -> ProtoBinding {
     ProtoBinding {
         node_ids_by_alias: binding
+            .nodes
+            .iter()
+            .map(|(alias, id)| (alias.clone(), id.0))
+            .collect(),
+        edge_ids_by_alias: binding
+            .edges
             .iter()
             .map(|(alias, id)| (alias.clone(), id.0))
             .collect(),
@@ -236,11 +368,18 @@ fn binding_to_proto(binding: &Binding) -> ProtoBinding {
 }
 
 fn proto_binding_to_binding(proto: &ProtoBinding) -> Binding {
-    proto
-        .node_ids_by_alias
-        .iter()
-        .map(|(alias, id)| (alias.clone(), NodeId(*id)))
-        .collect()
+    Binding {
+        nodes: proto
+            .node_ids_by_alias
+            .iter()
+            .map(|(alias, id)| (alias.clone(), NodeId(*id)))
+            .collect::<HashMap<_, _>>(),
+        edges: proto
+            .edge_ids_by_alias
+            .iter()
+            .map(|(alias, id)| (alias.clone(), EdgeId(*id)))
+            .collect::<HashMap<_, _>>(),
+    }
 }
 
 fn proto_value_to_property_key(value: ProtoValue) -> Result<PropertyKey, Status> {

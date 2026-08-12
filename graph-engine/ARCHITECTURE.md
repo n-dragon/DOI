@@ -14,9 +14,16 @@ discovery Kubernetes, rebalancement, observabilité câblée (traces
 OpenTelemetry propagées à travers le cluster, métriques Prometheus). Les
 deux binaires réseau (`graph-coordinator`/`graph-partition-node`)
 communiquent en vrai gRPC entre process séparés (voir §5 plus bas), y
-compris à travers plusieurs partitions. Détail par tâche : `TASKS.md`
-(Phase 2, toutes tâches cochées ✅, avec les décisions prises pendant
-l'implémentation documentées en ligne).
+compris à travers plusieurs partitions. Le DSL a depuis été étendu
+au-delà des deux formes prioritaires du spec §7.1 — hors roadmap
+d'origine (§12 ne prévoit que Phase 0-3, celle-ci n'y figure pas ;
+voir §6 plus bas) : alias d'arête, comparaison propriété-propriété
+inter-alias, `NOT EXISTS`/anti-jointure corrélée, pour rendre
+exprimable en une seule requête un use case concret de plateforme de
+données référentielle (moindre privilège prouvé par la télémétrie —
+`schema/least_privilege.graphidl`). Détail par tâche : `TASKS.md`
+(Phase 2 et l'extension hors roadmap, toutes tâches cochées ✅, avec
+les décisions prises pendant l'implémentation documentées en ligne).
 
 ## 1. Vue d'ensemble du workspace
 
@@ -225,3 +232,66 @@ Reste à faire :
   OB4.
 - `GetIndexStatus` en mode distribué relaie une partition représentative
   plutôt que d'agréger l'état du cluster — voir `TASKS.md` CO5.
+
+## 6. Extension DSL hors roadmap : moindre privilège via télémétrie
+
+Cette extension part d'un use case concret plutôt que de la roadmap
+`§12` : identifier les permissions IAM déclarées mais jamais utilisées,
+en croisant ce qu'une identité *peut* faire (accès déclaré,
+`ASSUMES`/`GRANTS`) avec ce qu'elle *a fait* (accès observé par
+télémétrie, `RAN_AS`/`ACCESSED`) — `schema/least_privilege.graphidl`
+documente le modèle de données complet. La requête centrale du use case
+est un `déclaré MOINS observé` : pour chaque permission accordée, existe-
+t-il une preuve d'usage dans la fenêtre de confiance ? Absente, c'est un
+candidat de moindre privilège. Cette forme de requête (anti-jointure
+corrélée sur deux propriétés d'arête liées par le même alias de nœud
+externe) n'existait dans aucune des deux formes prioritaires du DSL
+(§7.1) — d'où l'extension, détaillée tâche par tâche dans `TASKS.md`
+(« Extension DSL hors roadmap »). Décisions transverses, à l'échelle de
+l'architecture plutôt que d'une seule crate :
+
+- **Alias d'arête restreint à un hop fixe.** `[g:GRANTS]` ne peut lier
+  qu'une arête à hop `min == max == 1` (validateur, D12/D13) — un alias
+  sur `*1..3` désignerait une arête ambiguë de la chaîne. Portée
+  volontairement étroite : le use case n'a jamais besoin d'un alias sur
+  un hop variable, l'étendre y compris à ce cas ne peut se justifier que
+  par un second use case encore hypothétique.
+- **Pas de langage de dates.** `a.last_seen >= "2024-05-01T00:00:00Z"`
+  compare un littéral `String` RFC3339 à une propriété `Timestamp` —
+  aucune fonction `datetime()`/`duration()` n'a été ajoutée au DSL. La
+  coercion est faite côté exécution (`graph-query::filter_eval`, Q9),
+  pas dans l'AST : un seul point d'usage ne justifie pas un langage
+  d'expressions dédié.
+- **`NOT EXISTS` restreint à un hop sortant unique, non imbriqué, entre
+  deux alias déjà liés par le `MATCH` externe.** Cette restriction n'est
+  pas arbitraire : elle vient directement de la règle de placement
+  physique posée en Phase 1/2 pour les nœuds — *l'enregistrement d'une
+  arête est possédé par la partition de sa source* (`IX10`, même
+  critère que `build_csr` pour l'adjacence sortante locale). Un hop
+  entrant obligerait à interroger la partition de la *destination* pour
+  une information (les propriétés de l'arête) qui n'y vit pas ; un hop
+  imbriqué multiplierait les allers-retours réseau pour un besoin que ce
+  use case ne démontre pas. La sous-requête doit être *corrélée* — son
+  nœud d'ancrage doit déjà être lié à l'extérieur, jamais redéclaré avec
+  son propre label — c'est ce qui la distingue d'un second pattern
+  indépendant et lui donne un sens d'anti-jointure plutôt que
+  d'existence isolée.
+- **Résolution des conditions externes par binding, puis regroupement.**
+  `a.action = g.action` référence la propriété d'un alias externe (`g`)
+  dont la valeur varie par ligne de résultat — impossible à résoudre une
+  seule fois pour toute la frontière, à la différence d'un `WHERE`
+  classique après `ExpandHop`. `ScatterGatherExecutor::execute_anti_join`
+  hydrate ces valeurs par binding (une seule fois, via
+  `GetNodeProperties`/`GetEdgeProperties`) puis regroupe les bindings qui
+  partagent la même liste de conditions déjà résolues avant d'émettre
+  une requête `CheckAntiJoin` — un appel par `(partition, groupe)`, pas
+  par binding. Sans ce regroupement, l'anti-jointure distribuée aurait
+  un coût réseau proportionnel au nombre de bindings plutôt qu'au nombre
+  de valeurs distinctes réellement en jeu.
+
+Vérifié bout en bout sur deux partitions réelles, vraie infrastructure
+Iceberg, vrai gRPC (`bin/graph-coordinator/tests/lp_end_to_end.rs`, LP1)
+— pas seulement au niveau unitaire, pour la même raison que CO4/Q8 l'ont
+été en Phase 1/2 : un anti-join qui fonctionne en mémoire mais jamais
+testé à travers une vraie frontière de partition serait une preuve
+incomplète.

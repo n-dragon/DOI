@@ -152,6 +152,17 @@ test Phase 1 renommé (`no_adjacency_entry_is_ever_remote_when_mono_partition`).
 **Reste à faire.** Décider la valeur par défaut de l'intervalle de
 rebuild (§5.3, `TBD`).
 
+**Fait (extension hors roadmap, IX9-IX10).** `EdgeRecord { edge_type,
+properties }` et `IndexGeneration.edge_records` — jusqu'ici seules les
+propriétés des *nœuds* survivaient à la construction d'index
+(`node_records`), les arêtes n'existaient que comme entrées CSR sans
+propriétés attachées. *Décision* : un enregistrement d'arête est possédé
+par la partition de sa **source**, le même critère que `build_csr`
+utilise déjà pour l'adjacence sortante locale — pas une seconde règle de
+répartition à mémoriser séparément. Conséquence : une requête
+`GetEdgeProperties`/anti-jointure pour une `EdgeId` donnée n'atteint
+jamais plus d'une partition.
+
 ---
 
 ## graph-dsl
@@ -189,8 +200,24 @@ compare deux alias liés, pas une propriété, donc ne peut pas réutiliser
 `PropertyFilter`.
 
 **Reste à faire (Phase 0).**
-- Grammaire formelle complète (alias avancés, `ORDER BY`, `LIMIT`,
-  pagination — encore `TBD` dans le spec §7.1).
+- Grammaire formelle complète (`ORDER BY`, `LIMIT`, pagination — encore
+  `TBD` dans le spec §7.1).
+
+**Fait (extension hors roadmap, D10-D13).** Alias d'arête (`[g:GRANTS]`,
+restreint à un hop fixe — un alias sur `*1..3` désignerait une arête
+ambiguë de la chaîne, rejeté par le validateur) ; `RETURN` mixte
+(`ReturnItem { alias, property: Option<String> }` remplace le
+`Vec<String>` d'origine — un alias nu est `property: None`, pas un cas
+distinct) ; `WhereCondition::PropertyComparison` (`a.action = g.action`,
+propriété-propriété inter-alias, à ne pas confondre avec
+`Property`/`AliasComparison`) ; `WhereCondition::NotExists` — sous-
+requête corrélée restreinte à un unique hop **sortant** entre deux alias
+déjà liés par le `MATCH` externe, non imbriquable. Motivée par un use
+case concret (moindre privilège via télémétrie,
+`schema/least_privilege.graphidl`) plutôt qu'une grammaire générique de
+sous-requêtes. Détail complet des décisions (pourquoi un hop sortant
+seulement, pourquoi pas de `datetime()`) dans `TASKS.md` et
+`ARCHITECTURE.md` §6.
 
 ---
 
@@ -254,6 +281,26 @@ vers chaque partition), déduplication par clé `(alias, node_id)` triée.
 Testé bout en bout avec un franchissement réel de frontière de partition
 (Q8). Détail complet des décisions dans `TASKS.md`.
 
+**Fait (extension hors roadmap, Q9-Q12).** `Binding` passe d'un alias
+`type Binding = HashMap<String, NodeId>` à une struct `{ nodes, edges }`
+— une ligne de résultat lie désormais des alias de nœuds *et* d'arêtes.
+`PlanStep::{ResolveAll, AntiJoin}` : `ResolveAll` pour un `MATCH` sans
+filtre de départ (`MATCH (w:Workload)`, jusqu'ici toute requête en
+supposait un) ; `AntiJoin` pour `NOT EXISTS`, compilé en une étape
+séparée après la chaîne principale plutôt qu'imbriquée dans le plan — un
+anti-join filtre des bindings déjà résolus. `filter_eval.rs` (nouveau,
+partagé entre les deux exécuteurs) ajoute une coercion RFC3339 →
+microsecondes pour comparer un littéral `String` à une propriété
+`Timestamp` — sans elle, `a.last_seen >= "2024-05-…"` n'aurait jamais
+matché silencieusement. Décision la plus significative :
+`ScatterGatherExecutor::execute_anti_join` doit résoudre des conditions
+qui référencent un alias *externe* dont la valeur varie par binding
+(`a.action = g.action`) — impossible à router en un seul appel comme un
+`WHERE` classique. Résolu par hydratation par binding puis regroupement
+des bindings partageant la même liste de conditions déjà résolues avant
+d'émettre `CheckAntiJoin` (un appel par `(partition, groupe)`, pas par
+binding). Détail complet dans `TASKS.md` et `ARCHITECTURE.md` §6.
+
 ---
 
 ## graph-proto
@@ -284,6 +331,15 @@ changé son `pinned_snapshot_id` (scalaire) en `pinned_snapshot_by_table`
 **Reste à faire.** `List`/`Vector` du schéma §3.2 ne sont pas
 représentables dans le `Value` `oneof` actuel — pas encore nécessaire
 tant que le DSL ne les utilise pas dans une clause `WHERE`.
+
+**Fait (extension hors roadmap, PROTO1).** Étendu sans casser le contrat
+existant : `ExpandHopRequest.edge_alias` (optionnel), `Binding.
+edge_ids_by_alias` (pendant arête de la map nœud existante),
+`ResolveAll`/`CheckAntiJoin`/`GetEdgeProperties` (nouvelles RPC —
+`GetEdgeProperties` symétrique de `GetNodeProperties`, Phase 1),
+`QueryResult.edge_properties`. `RETURN alias.propriété` réutilise le
+`projection: map<string, Value>` existant avec une clé composite
+`"alias.propriété"` plutôt qu'un message de projection dédié par forme.
 
 ---
 
@@ -413,6 +469,15 @@ id comme échantillon représentatif plutôt que d'agréger l'état des N
 partitions — `IndexStatusResponse` (§8.2) n'a pas été conçu pour une vue
 multi-partitions ; pas une TBD bloquante, juste non résolue ici.
 
+**Fait (extension hors roadmap, CO6).** La projection finale distingue,
+par binding, si un alias `RETURN` désigne un nœud ou une arête —
+`alias_is_edge`, résolu en observant simplement dans quelle map (`nodes`
+ou `edges`) du premier binding disponible l'alias apparaît — avant de
+choisir entre projection d'enregistrement complet (alias nu) et
+projection scalaire unique (`alias.propriété`). `GrpcPartitionRpc` gagne
+`resolve_all`/`get_edge_properties`/`check_anti_join`, symétriques des
+RPC déjà câblées pour Q5-Q8.
+
 ---
 
 ## bin/graph-partition-node — ✅ terminé (Phase 1)
@@ -458,6 +523,20 @@ SimpleLocalExecutor`, traduction wire ↔ types du plan), `get_index_status`,
 sur de vrais sockets TCP loopback, connectés par de vrais clients gRPC
 générés — exécute la requête k-hop exemple du spec §7.1 de bout en bout.
 **C'est le jalon MVP mono-partition (spec §12 Phase 1).**
+
+**Fait (extension hors roadmap, PN6).** `PartitionServiceImpl` gagne
+`resolve_all` (scan complet d'un label, pour un `MATCH` sans filtre),
+`check_anti_join` (évalue `NOT EXISTS` localement — un hop sortant, les
+propriétés déjà résolues fournies par l'appelant) et
+`get_edge_properties` (symétrique de `get_node_properties`, Phase 1) ;
+`expand_hop` câblé pour `edge_alias`.
+
+**Test d'intégration dédié (LP1, côté `graph-coordinator`).** Même
+forme que CO4, sur `schema/least_privilege.graphidl`, mais **deux**
+partitions réelles (pas une) pour que `check_anti_join` franchisse
+effectivement une frontière de partition, et la requête centrale du use
+case moindre-privilège verbatim — voir `TASKS.md` et `ARCHITECTURE.md`
+§6.
 
 **Déploiement multi-process, vérifié réellement.** Le catalogue dev est
 `iceberg-catalog-sql` + SQLite (`open_sql_catalog`, révision de ST1) — un

@@ -71,4 +71,46 @@ mod tests {
 
         assert!(DslGrammar::parse(Rule::query, source).is_err());
     }
+
+    /// The least-privilege-via-telemetry use case's central query —
+    /// edge aliases, `RETURN alias.property`, `alias.prop OP alias.prop`,
+    /// and a correlated `NOT EXISTS { ... }` all in one query.
+    #[test]
+    fn parses_the_least_privilege_example() {
+        let source = r#"
+            MATCH (w:Workload)-[:ASSUMES]->(r:IAMRole)-[g:GRANTS]->(d:DataStore)
+            WHERE d.data_class = "sensitive"
+              AND NOT EXISTS {
+                MATCH (w)-[a:ACCESSED]->(d)
+                WHERE a.action = g.action AND a.last_seen >= "2024-05-01T00:00:00Z"
+              }
+            RETURN w.service, w.team, r.arn, g.action, d.arn
+        "#;
+
+        DslGrammar::parse(Rule::query, source)
+            .expect("the least-privilege-via-telemetry example should parse");
+    }
+
+    #[test]
+    fn accepts_an_edge_alias_alone_with_no_type() {
+        let source = "MATCH (a)-[e]->(b) RETURN e";
+        DslGrammar::parse(Rule::query, source).expect("a bare edge alias should parse");
+    }
+
+    #[test]
+    fn accepts_a_return_item_with_a_property() {
+        let source = "MATCH (p:Person) RETURN p.name";
+        DslGrammar::parse(Rule::query, source).expect("RETURN alias.property should parse");
+    }
+
+    #[test]
+    fn rejects_a_not_exists_clause_missing_its_closing_brace() {
+        let source = r#"
+            MATCH (w:Workload)
+            WHERE NOT EXISTS { MATCH (w)-[a:ACCESSED]->(w)
+            RETURN w
+        "#;
+
+        assert!(DslGrammar::parse(Rule::query, source).is_err());
+    }
 }
