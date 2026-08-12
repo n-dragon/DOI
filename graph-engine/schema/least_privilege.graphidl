@@ -1,0 +1,126 @@
+// Least privilege, proven by telemetry — cf. the design note this
+// schema implements. The whole use case rests on one rule: declared and
+// observed access are never merged into a single "effective" edge.
+// They stay two distinct edge types between the same node pair, and the
+// gap between them is the product (an unused permission = a declared
+// edge with no matching observed edge inside the trust window).
+//
+//   declared : (:Workload)-[:ASSUMES]->(:IAMRole)-[:GRANTS]->(:DataStore)
+//   observed : (:Workload)-[:RAN_AS]->(:IAMRole)
+//              (:Workload)-[:ACCESSED]->(:DataStore)
+//
+// `ACCESSED` goes Workload -> DataStore, not IAMRole -> DataStore: the
+// workload is the actor, the role is only the vehicle. That's what lets
+// a finding say "this pod uses the permission, those 39 others don't"
+// instead of a role-level "used" that hides per-workload variance.
+//
+// `data_class` on DataStore comes from the Sensitive Data Scanner in
+// the real pipeline — it's what turns "unused permission" into "unused
+// permission on sensitive data", i.e. what makes a finding a priority.
+//
+// KNOWN GAP vs. the design note's central query: graph-dsl v1 has no
+// edge aliases (`edge_pattern` in dsl.pest never binds one) and no
+// `NOT EXISTS`/subquery syntax — `WHERE` only reaches a *node* alias's
+// properties (`property_condition = ident "." ident OP literal`).
+// So today there is no way to write, in this engine's own query
+// language, "a GRANTS edge whose action has no matching ACCESSED edge
+// within 90 days". `@indexed` on `GRANTS.action`/`ACCESSED.action`
+// below is included for readability and future-proofing, but has no
+// effect yet either: `graph-index`'s property index is only ever built
+// from node rows (see `IcebergIndexBuilder::build_property_index`),
+// edge properties aren't indexed at all in v1. Computing the actual
+// unused-permission set today means exporting `GRANTS` and `ACCESSED`
+// rows (two k-hop/pattern queries) and taking the set difference
+// downstream — closer to what spec §7.1/§1.4 already expects for
+// anything past pure traversal. Extending the DSL with edge aliases +
+// an anti-join/NOT EXISTS clause is the natural next step to run this
+// query in-engine; flagging it here rather than pretending the schema
+// alone makes it work.
+
+schema graph_v1 {
+  node Workload {
+    id: NodeId
+    // Business key the id is hashed from (arn / pod uid) — kept as its
+    // own indexed property so queries and findings can display/filter
+    // on it directly, same pattern `cloud_cost.graphidl` uses for
+    // `Resource.name` (spec §3.3's node_id double mode: the id is
+    // derived, the source key is retained).
+    @indexed workload_id: String
+    @indexed kind: String              // ec2 | pod | lambda | ecs_task
+    @indexed cloud_account: String
+    @indexed env: String
+    @indexed service: String           // routes the finding to a team
+    @indexed team: String
+    // Validity floor for every OBSERVED edge below: a workload younger
+    // than the telemetry window has no coverage yet. A query must
+    // exclude these, never count them as over-privileged — absence of
+    // proof is not proof of absence.
+    observed_since: Timestamp
+  }
+
+  node IAMRole {
+    id: NodeId
+    @indexed arn: String
+    @indexed cloud_account: String
+    trust_principals: List<String>
+  }
+
+  node DataStore {
+    id: NodeId
+    @indexed arn: String
+    @indexed kind: String               // s3 | dynamodb | rds | secretsmanager
+    // From the Sensitive Data Scanner. Turns "unused permission" into
+    // "unused permission on sensitive data" — the priority signal.
+    @indexed data_class: String         // sensitive | internal | public
+  }
+
+  // -- Declared: from IAM policy evaluation, refreshed on scan. --
+
+  edge ASSUMES {
+    from: Workload
+    to: IAMRole
+    via: String            // instance profile | IRSA | session convention
+    evaluated_at: Timestamp
+  }
+
+  edge GRANTS {
+    from: IAMRole
+    to: DataStore
+    // Concrete action, not the policy's pattern — wildcards (`s3:*`)
+    // MUST be expanded at ingestion (before this edge is written), or
+    // no join against ACCESSED.action is ever possible. Volumetric:
+    // materialize at the AWS-service level for the broad view, exact
+    // action only for edges landing on `sensitive` DataStores.
+    @indexed action: String
+    effect: String
+    resource_pattern: String   // the original glob, kept for audit
+    policy_arn: String
+    evaluated_at: Timestamp
+  }
+
+  // -- Observed: aggregated from telemetry, never event by event. --
+  // One edge per (workload, role|datastore[, action]) with counters and
+  // bounds — not one edge per CloudTrail event, or the graph explodes
+  // (billions of daily S3 accesses collapse into a few thousand edges).
+
+  edge RAN_AS {
+    from: Workload
+    to: IAMRole
+    first_seen: Timestamp
+    last_seen: Timestamp
+    count: Int64
+    window: String          // e.g. "90d" — the aggregation horizon
+  }
+
+  edge ACCESSED {
+    from: Workload
+    to: DataStore
+    @indexed action: String       // same vocabulary as GRANTS.action
+    first_seen: Timestamp
+    last_seen: Timestamp
+    count: Int64
+    window: String
+    evidence_ref: String          // span_id or log id, for audit
+    source: String                 // cloudtrail | apm_span | ebpf
+  }
+}
