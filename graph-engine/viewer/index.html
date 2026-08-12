@@ -528,17 +528,17 @@
       <div class="main-col">
     <div class="card diagram-card">
       <div class="diagram-toolbar">
-        <span class="diagram-title">prod-aws · full fleet, 988 nodes</span>
+        <span class="diagram-title">prod-aws · sample of 20, from 988 nodes</span>
         <div class="toggle" role="group" aria-label="Diagram mode">
           <button type="button" data-role="btn-full" aria-pressed="true">full graph</button>
           <button type="button" data-role="btn-query" aria-pressed="false">query result</button>
         </div>
       </div>
 
-      <div class="force-graph" data-role="force-graph" role="img" aria-label="Force-directed graph of the full Resource/IAMRole/DataStore fleet behind this tab — roughly 1000 workloads, roles, and data stores connected by RUNS_AS and CAN_READ. In query result mode, the workloads whose declared access was never actually used are highlighted red."></div>
-      <p class="empty-hint" data-role="diagram-status" style="padding: 4px 4px 8px;">Loading the full graph from the coordinator…</p>
+      <div class="force-graph" data-role="force-graph" role="img" aria-label="Force-directed graph of a 20-node sample of the Resource/IAMRole/DataStore fleet behind this tab, colored by node type. In query result mode, the sample is chosen to show query matches first — workloads whose declared access was never actually used are highlighted with a red ring and drawn larger."></div>
+      <p class="empty-hint" data-role="diagram-status" style="padding: 4px 4px 8px;">Loading the graph from the coordinator…</p>
       <figcaption style="padding: 0 4px 16px; font-size: 12px; color: var(--ink-faint);">
-        Color: node type (full graph) or query match (query result — red is an unused permission). Line: <code class="mono">RUNS_AS</code> or <code class="mono">CAN_READ</code>, undifferentiated at this density. Rendered with
+        Color: node type — blue <code class="mono">Resource</code>, purple <code class="mono">IAMRole</code>, red-brown <code class="mono">DataStore</code> — always, in both modes. Red ring + larger: an unused-permission match, in query result mode. Only 20 nodes are drawn at once (query matches prioritized, see the caption above the diagram) — the full ~988-node fetch still drives every match and count on this page, only the drawing is capped. Rendered with
         <a href="https://github.com/vasturiano/react-force-graph" target="_blank" rel="noopener">react-force-graph</a> (bundled locally, <code class="mono">viewer/vendor/</code>) — drag nodes, scroll to zoom, hover for details.
       </figcaption>
     </div>
@@ -576,8 +576,8 @@ RETURN r, role, g.action, d</textarea>
 
       <div class="card panel">
         <h2>Node types</h2>
-        <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance (973)</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-role)"></span><span class="name">IAMRole (10)</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store)"></span><span class="name">DataStore (10, 3 pii)</span></div><div class="legend-row"><span class="swatch" style="background:var(--danger)"></span><span class="name">in query result mode: unused permission</span></div></div>
-        <p class="empty-hint" style="margin-top:10px;">One shared inventory: <code class="mono">Resource</code>/<code class="mono">IAMRole</code>/<code class="mono">DataStore</code> nodes. <code class="mono">ACCESSED</code> telemetry (715 edges) is cross-referenced by the query but not drawn — at this density it would just be noise.</p>
+        <div class="legend"><div class="legend-row"><span class="swatch" style="background:var(--node-compute)"></span><span class="name">Resource · ec2_instance (973)</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-role)"></span><span class="name">IAMRole (10)</span></div><div class="legend-row"><span class="swatch" style="background:var(--node-store)"></span><span class="name">DataStore (10, 3 pii)</span></div><div class="legend-row"><span class="swatch" style="background:transparent; border:2.5px solid var(--danger)"></span><span class="name">in query result mode: unused permission</span></div></div>
+        <p class="empty-hint" style="margin-top:10px;">One shared inventory: <code class="mono">Resource</code>/<code class="mono">IAMRole</code>/<code class="mono">DataStore</code> nodes, always colored by this legend regardless of mode. <code class="mono">ACCESSED</code> telemetry (715 edges) is cross-referenced by the query but never drawn as its own line.</p>
       </div>
 
       <div class="card panel">
@@ -597,11 +597,12 @@ RETURN r, role, g.action, d</textarea>
         </p>
         <p class="empty-hint" style="margin-top:10px;">
           <b style="color:var(--ink);">What this tab costs on the wire:</b> two broad queries
-          once per page load to build the ~988-node/~980-edge diagram
-          (<code class="mono">RUNS_AS</code>, <code class="mono">CAN_READ</code>), then one more
-          per "Run query" — the anti-join itself, ~180 rows back over 973 candidate resources.
-          Nothing is computed in this browser; the coordinator hydrates every node/edge property
-          returned.
+          once per page load to fetch the full ~988-node/~980-edge structure the diagram then
+          samples 20 nodes from (<code class="mono">RUNS_AS</code>, <code class="mono">CAN_READ</code>),
+          then one more per "Run query" — the anti-join itself, ~180 rows back over 973 candidate
+          resources. Nothing is computed in this browser; the coordinator hydrates every
+          node/edge property returned, and the 20-node cap is drawing-only — the fetch and the
+          match count are always against the whole fleet.
         </p>
         <p class="empty-hint" style="margin-top:10px;">
           <b style="color:var(--ink);">Known gap:</b> the anti-join has no index to lean on —
@@ -851,7 +852,7 @@ RETURN r, role, g.action, d</textarea>
           }).join('') + '</ul>';
           if (rows.length > RESULT_LIST_CAP) {
             html += '<p class="empty-hint" style="margin-top:10px;">+ ' + (rows.length - RESULT_LIST_CAP) +
-              ' more not shown here — every row returned that also exists in the drawn graph is highlighted red in the diagram.</p>';
+              ' more not shown here — the diagram draws up to ' + DIAGRAM_NODE_CAP + ' matches at a time (query matches first, see its caption).</p>';
           }
         } else {
           html = '<p class="empty-hint">No rows matched this query.</p>';
@@ -898,6 +899,65 @@ RETURN r, role, g.action, d</textarea>
     return Object.keys(primary).map(function (key) { return { key: key, status: 'included' }; });
   }
 
+  var DIAGRAM_NODE_CAP = 20;
+
+  // The live coordinator's graph is ~988 nodes — rendering all of them
+  // at once was a dense, mostly-illegible hairball (see git history's
+  // screenshots). This picks at most `cap` nodes to actually hand the
+  // force-graph widget, prioritized so the interesting ones are never the
+  // ones left out:
+  //   1. query matches first (the whole point of query-result mode is to
+  //      see *which* nodes matched — dropping them from a capped view
+  //      would defeat it)
+  //   2. their direct neighbors (the role/store a matched resource runs
+  //      as / reads — context for *why* it matched)
+  //   3. a round-robin fill across labels, so full-graph mode (no
+  //      matches to prioritize) still shows a mix of Resource/IAMRole/
+  //      DataStore rather than whichever label happened to load first
+  function sampleForDisplay(structureGraph, statusByKey, cap) {
+    var chosen = [];
+    var chosenSet = {};
+    function take(key) {
+      if (!key || chosenSet[key] || chosen.length >= cap) return;
+      chosenSet[key] = true;
+      chosen.push(key);
+    }
+
+    structureGraph.nodes.forEach(function (n) {
+      if (statusByKey[n.id] && statusByKey[n.id].status === 'included') take(n.id);
+    });
+    if (chosen.length < cap) {
+      structureGraph.links.forEach(function (l) {
+        if (chosenSet[l.source]) take(l.target);
+        if (chosenSet[l.target]) take(l.source);
+      });
+    }
+    if (chosen.length < cap) {
+      var byLabel = {};
+      var labels = [];
+      structureGraph.nodes.forEach(function (n) {
+        if (!byLabel[n.label]) { byLabel[n.label] = []; labels.push(n.label); }
+        byLabel[n.label].push(n.id);
+      });
+      for (var round = 0, progressed = true; chosen.length < cap && progressed; round++) {
+        progressed = false;
+        for (var i = 0; i < labels.length && chosen.length < cap; i++) {
+          var list = byLabel[labels[i]];
+          if (round < list.length) { take(list[round]); progressed = true; }
+        }
+      }
+    }
+
+    var nodes = chosen.map(function (key) {
+      var n = structureGraph.nodes.find(function (x) { return x.id === key; });
+      return { id: n.id, label: n.label, name: n.name };
+    });
+    var links = structureGraph.links.filter(function (l) {
+      return chosenSet[l.source] && chosenSet[l.target];
+    });
+    return { nodes: nodes, links: links };
+  }
+
   function wireUp(uc) {
     var section = document.querySelector('.usecase[data-usecase="' + uc.id + '"]');
     var el = function (role) { return section.querySelector('[data-role="' + role + '"]'); };
@@ -916,21 +976,25 @@ RETURN r, role, g.action, d</textarea>
       var queryMode = section.classList.contains('mode-query');
       var statusByKey = {};
       (statuses || []).forEach(function (s) { statusByKey[s.key] = s; });
-      var nodes = structureGraph.nodes.map(function (n) {
+      var sample = sampleForDisplay(structureGraph, statusByKey, DIAGRAM_NODE_CAP);
+      var nodes = sample.nodes.map(function (n) {
         var s = statusByKey[n.id];
         return { id: n.id, label: n.label, name: n.name, status: s ? s.status : undefined };
       });
       window.DOIForceGraph.render(els.graph, {
-        nodes: nodes, links: structureGraph.links,
+        nodes: nodes, links: sample.links,
         mode: queryMode ? 'query' : 'full', height: 520
       });
+      var matched = (statuses || []).filter(function (s) { return s.status === 'included'; }).length;
+      els.diagramStatus.textContent = 'Showing ' + nodes.length + ' of ' + structureGraph.nodes.length +
+        ' nodes' + (matched ? ' (all ' + Math.min(matched, DIAGRAM_NODE_CAP) + ' matches shown first' +
+          (matched > DIAGRAM_NODE_CAP ? ', ' + (matched - DIAGRAM_NODE_CAP) + ' more in the results list' : '') + ')' : '') +
+        ' — drag to rearrange, hover for details.';
     }
 
     async function loadStructure() {
       try {
         structureGraph = await buildStructureGraph(uc);
-        els.diagramStatus.textContent = structureGraph.nodes.length + ' nodes, ' +
-          structureGraph.links.length + ' edges (RUNS_AS + CAN_READ) — drag to rearrange, hover for details.';
         renderDiagram(last ? last.statuses : null);
       } catch (err) {
         els.diagramStatus.textContent = 'Failed to load the graph structure: ' + err.message;

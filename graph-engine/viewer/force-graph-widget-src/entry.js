@@ -6,12 +6,14 @@
 // itself need to be React — only this one diagram widget is a React
 // component internally.
 //
-// Small circles, physics-positioned, auto-colored by label — the
-// Unused permissions tab renders its full ~1000-node dataset with this,
-// not a handful of hand-positioned boxes (that approach doesn't scale
-// past a few nodes; see the git history of this file for the version
-// that drew them). Status (included/excluded) is a color + size override
-// on top of the label color, not a second custom shape.
+// index.html caps what it hands this component to ~20 nodes
+// (sampleForDisplay in index.html) — few enough that a small custom
+// canvas draw (circle + label, not just react-force-graph-2d's default
+// dot) stays legible and cheap, unlike the ~1000-node full fleet this
+// used to render (see git history: nodeColor/nodeVal only, no per-node
+// text). Color is always the node's label (type) — status
+// (included/excluded) only changes the ring and size, never the fill,
+// so type stays identifiable in both modes.
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import ForceGraph2D from 'react-force-graph-2d';
@@ -27,8 +29,11 @@ function cssVar(name, fallback) {
 // decided by prefers-color-scheme/data-theme before first paint).
 function readPalette() {
   return {
+    ink: cssVar('--ink', '#18132b'),
     inkFaint: cssVar('--ink-faint', '#948da8'),
+    excludedFill: cssVar('--excluded-fill', '#f1eef8'),
     excludedStroke: cssVar('--excluded-stroke', '#d3cbe6'),
+    excludedText: cssVar('--excluded-text', '#a79cc2'),
     danger: cssVar('--danger', '#a3244f'),
     nodeCompute: cssVar('--node-compute', '#3f7fe0'),
     nodeRole: cssVar('--node-role', '#6b4fa0'),
@@ -42,24 +47,19 @@ const LABEL_COLOR = {
   DataStore: 'nodeStore',
 };
 
-const LABEL_VAL = {
-  Resource: 1,
-  IAMRole: 2.5,
-  DataStore: 2.5,
+const LABEL_RADIUS = {
+  Resource: 6,
+  IAMRole: 8,
+  DataStore: 8,
 };
 
-function colorFor(node, mode, pal) {
-  if (mode === 'query') {
-    if (node.status === 'included') return pal.danger;
-    return pal.excludedStroke;
-  }
+function baseColorFor(node, pal) {
   return pal[LABEL_COLOR[node.label]] || pal.nodeCompute;
 }
 
-function valFor(node, mode) {
-  const base = LABEL_VAL[node.label] || 1;
-  if (mode === 'query' && node.status === 'included') return base * 2.2;
-  return base;
+function radiusFor(node, mode) {
+  const r = LABEL_RADIUS[node.label] || 6;
+  return mode === 'query' && node.status === 'included' ? r * 1.6 : r;
 }
 
 function GraphWidget({ nodes, links, mode, height }) {
@@ -82,13 +82,49 @@ function GraphWidget({ nodes, links, mode, height }) {
 
   useEffect(() => {
     const t = setTimeout(() => {
-      if (fgRef.current) fgRef.current.zoomToFit(300, 24);
+      if (fgRef.current) fgRef.current.zoomToFit(300, 40);
     }, 600);
     return () => clearTimeout(t);
-  }, [width, height, nodes, links]);
+  }, [width, height, nodes, links, mode]);
 
-  const nodeColor = useCallback((node) => colorFor(node, mode, pal), [mode, pal]);
-  const nodeVal = useCallback((node) => valFor(node, mode), [mode]);
+  const nodeCanvasObject = useCallback(
+    (node, ctx, globalScale) => {
+      const r = radiusFor(node, mode);
+      const excluded = mode === 'query' && node.status === 'excluded';
+      const included = mode === 'query' && node.status === 'included';
+
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+      ctx.fillStyle = excluded ? pal.excludedFill : baseColorFor(node, pal);
+      ctx.fill();
+      ctx.lineWidth = included ? 2.5 : 1.4;
+      ctx.strokeStyle = included ? pal.danger : excluded ? pal.excludedStroke : baseColorFor(node, pal);
+      ctx.stroke();
+
+      // Constant on-screen size regardless of zoom (the usual
+      // font-size/globalScale trick) — legible whether zoomToFit landed
+      // tight or wide on this run's 20-node sample.
+      const fontSize = 11 / globalScale;
+      ctx.font = fontSize + 'px ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = excluded ? pal.excludedText : pal.ink;
+      ctx.fillText(node.name, node.x, node.y + r + 2);
+    },
+    [mode, pal]
+  );
+
+  const nodePointerAreaPaint = useCallback(
+    (node, color, ctx) => {
+      const r = radiusFor(node, mode);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+      ctx.fill();
+    },
+    [mode]
+  );
+
   const nodeLabel = useCallback((n) => {
     const status =
       n.status === 'included' ? ' · unused permission' : n.status === 'excluded' ? ' · in use / not applicable' : '';
@@ -104,14 +140,13 @@ function GraphWidget({ nodes, links, mode, height }) {
       width,
       height,
       backgroundColor: 'rgba(0,0,0,0)',
-      nodeColor,
-      nodeVal,
+      nodeCanvasObject,
+      nodePointerAreaPaint,
       nodeLabel,
-      nodeRelSize: 3,
       linkColor: () => pal.inkFaint,
-      linkWidth: 0.4,
+      linkWidth: 1,
       linkLabel: (l) => l.title || '',
-      cooldownTicks: 120,
+      cooldownTicks: 200,
       enableNodeDrag: true,
     })
   );
