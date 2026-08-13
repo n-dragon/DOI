@@ -22,11 +22,17 @@
 //     }
 //   RETURN w.service, w.team, r.arn, g.action, d.arn
 //
-// The rest of the full grammar (`ORDER BY`/`LIMIT`/pagination, `OR`,
-// nested `NOT EXISTS`, aggregation) is still explicitly `TBD`/out of
-// scope (§7.1, §1.4).
+// Extended again (task D14/D15, spec §7.1's own `ORDER BY`/`LIMIT` TBD)
+// with result ordering and truncation:
+//
+//   MATCH (p:Person)-[:KNOWS*1..3]->(friend:Person)
+//   RETURN friend ORDER BY friend.birth_year DESC LIMIT 10
+//
+// Scoped deliberately narrow — see `Query::order_by`'s doc comment for
+// why only a single sort key is accepted. Pagination (a resumable
+// cursor across calls) and `OR` in `WHERE` remain out of scope, `TBD`.
 
-query = { SOI ~ "MATCH" ~ pattern ~ where_clause? ~ return_clause ~ EOI }
+query = { SOI ~ "MATCH" ~ pattern ~ where_clause? ~ return_clause ~ order_by_clause? ~ limit_clause? ~ EOI }
 
 pattern = { node_pattern ~ (edge_pattern ~ node_pattern)* }
 
@@ -124,6 +130,21 @@ comparison_op = { "<=" | ">=" | "<>" | "=" | "<" | ">" }
 return_clause = { "RETURN" ~ return_item ~ ("," ~ return_item)* }
 
 return_item = { ident ~ ("." ~ ident)? }
+
+// `ORDER BY friend.birth_year DESC` — a single `alias.property` sort key
+// (task D14). Direction defaults to `ASC` when omitted, same convention
+// SQL uses. Only one key: the two example queries this DSL targets never
+// need a tiebreaker, and a multi-key sort is straightforward to add later
+// without a breaking grammar change (an optional `("," ~ order_by_key)*`
+// here) if a real use case shows up — not anticipated speculatively.
+order_by_clause = { "ORDER" ~ "BY" ~ ident ~ "." ~ ident ~ sort_direction? }
+
+sort_direction = { "ASC" | "DESC" }
+
+// `LIMIT 10` — caps the number of rows the coordinator streams back
+// (task D15). A bare integer; `number` (already used by `hop_range`) is
+// reused rather than `int_literal` since a negative limit has no meaning.
+limit_clause = { "LIMIT" ~ number }
 
 literal = { string_literal | float_literal | int_literal | bool_literal }
 

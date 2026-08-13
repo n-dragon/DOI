@@ -32,7 +32,9 @@
 
 use crate::grpc_partition_rpc::GrpcPartitionRpc;
 use graph_cluster::{Discovery, PartitionHasher};
-use graph_dsl::{Parser as DslParser, PestParser, ReturnItem, SchemaValidator, Validator};
+use graph_dsl::{
+    OrderBy, Parser as DslParser, PestParser, ReturnItem, SchemaValidator, SortDirection, Validator,
+};
 use graph_proto::v1::graph_service_server::GraphService;
 use graph_proto::v1::value::Kind as ValueKind;
 use graph_proto::v1::{
@@ -42,6 +44,7 @@ use graph_proto::v1::{
 };
 use graph_query::{Binding, NaivePlanner, Planner, ScatterGatherExecutor};
 use graph_schema::{EdgeId, NodeId, Schema};
+use graph_storage::PropertyValue;
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -120,7 +123,7 @@ impl GraphService for GraphServiceImpl {
             Status::unavailable(format!("cluster discovery failed: {e}"))
         })?;
 
-        let bindings = self
+        let mut bindings = self
             .executor
             .execute(&plan, &partitions)
             .await
@@ -139,22 +142,33 @@ impl GraphService for GraphServiceImpl {
         // read off the first binding that actually has it bound. A
         // `RETURN` alias that never appears in any binding at all (a
         // valid but empty result set) is simply never looked up below.
+        // *(task D14)* `order_by.alias` participates in the same
+        // node-vs-edge resolution as every `RETURN` alias — it's checked
+        // alongside `project`'s aliases here so a sort key that's never
+        // itself projected (`RETURN friend ORDER BY p.name`, sorting by a
+        // non-returned alias) still gets classified.
+        let order_by_aliases = query.order_by.iter().map(|o| o.alias.as_str());
+
         let mut alias_is_edge: HashMap<&str, bool> = HashMap::new();
-        for item in &project {
-            if alias_is_edge.contains_key(item.alias.as_str()) {
+        for alias in project
+            .iter()
+            .map(|item| item.alias.as_str())
+            .chain(order_by_aliases)
+        {
+            if alias_is_edge.contains_key(alias) {
                 continue;
             }
             let kind = bindings.iter().find_map(|b| {
-                if b.edges.contains_key(&item.alias) {
+                if b.edges.contains_key(alias) {
                     Some(true)
-                } else if b.nodes.contains_key(&item.alias) {
+                } else if b.nodes.contains_key(alias) {
                     Some(false)
                 } else {
                     None
                 }
             });
             if let Some(is_edge) = kind {
-                alias_is_edge.insert(item.alias.as_str(), is_edge);
+                alias_is_edge.insert(alias, is_edge);
             }
         }
 
@@ -162,27 +176,40 @@ impl GraphService for GraphServiceImpl {
         // projection, deduped once up front so a result set with
         // repeated nodes/edges across rows still costs one
         // GetNodeProperties/GetEdgeProperties round-trip per owning
-        // partition rather than one per row.
-        let needed_node_ids: Vec<NodeId> = bindings
+        // partition rather than one per row. `order_by`'s alias is
+        // included even when it isn't itself a `RETURN` item — sorting
+        // needs its property value hydrated just the same.
+        let mut needed_node_ids: HashSet<NodeId> = bindings
             .iter()
             .flat_map(|binding| {
                 project
                     .iter()
                     .filter_map(|item| resolve_node_id(item, &alias_is_edge, binding))
             })
-            .collect::<HashSet<_>>()
-            .into_iter()
             .collect();
-        let needed_edge_ids: Vec<EdgeId> = bindings
+        let mut needed_edge_ids: HashSet<EdgeId> = bindings
             .iter()
             .flat_map(|binding| {
                 project
                     .iter()
                     .filter_map(|item| resolve_edge_id(item, &alias_is_edge, binding))
             })
-            .collect::<HashSet<_>>()
-            .into_iter()
             .collect();
+        if let Some(order_by) = &query.order_by {
+            let is_edge = alias_is_edge
+                .get(order_by.alias.as_str())
+                .copied()
+                .unwrap_or(false);
+            for binding in &bindings {
+                if is_edge {
+                    needed_edge_ids.extend(binding.edges.get(&order_by.alias).copied());
+                } else {
+                    needed_node_ids.extend(binding.nodes.get(&order_by.alias).copied());
+                }
+            }
+        }
+        let needed_node_ids: Vec<NodeId> = needed_node_ids.into_iter().collect();
+        let needed_edge_ids: Vec<EdgeId> = needed_edge_ids.into_iter().collect();
 
         let node_properties = if needed_node_ids.is_empty() {
             HashMap::new()
@@ -200,6 +227,29 @@ impl GraphService for GraphServiceImpl {
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?
         };
+
+        // *(tasks D14/D15)* `ORDER BY`/`LIMIT` apply to the fully-gathered
+        // binding set, after hydration and before projection — see
+        // `sort_bindings_by_property`'s doc comment for why a global sort
+        // can't be pushed down or streamed incrementally the way `WHERE`
+        // is (Q6). `LIMIT` alone (no `ORDER BY`) is applied post-gather
+        // too, not pushed into `ResolveStart`/`ExpandHop` — same posture
+        // already established for `WHERE` (Q6's decision): correctness
+        // and a single code path first, network-cost pushdown is a
+        // documented future optimization rather than something this pass
+        // attempts.
+        if let Some(order_by) = &query.order_by {
+            sort_bindings_by_property(
+                &mut bindings,
+                order_by,
+                &alias_is_edge,
+                &node_properties,
+                &edge_properties,
+            );
+        }
+        if let Some(limit) = query.limit {
+            bindings.truncate(limit as usize);
+        }
 
         let results: Vec<Result<QueryResult, Status>> = bindings
             .into_iter()
@@ -378,6 +428,95 @@ fn resolve_edge_id(
         return None;
     }
     binding.edges.get(&item.alias).copied()
+}
+
+/// *(task D14)* Sorts the fully-gathered, already-hydrated binding set by
+/// a single `alias.property` key. Requires materializing the whole
+/// result set before any row can be emitted — unlike `WHERE` (evaluated
+/// once per `ExpandHop` step, still streamed after) a *global* order can
+/// only be known once every row is in hand, so `ORDER BY` trades the
+/// engine's usual incremental streaming (§7.5) for this one query shape.
+/// `LIMIT` alone, without `ORDER BY`, doesn't pay this cost — it just
+/// truncates whatever order scatter-gather produced.
+fn sort_bindings_by_property(
+    bindings: &mut [Binding],
+    order_by: &OrderBy,
+    alias_is_edge: &HashMap<&str, bool>,
+    node_properties: &HashMap<NodeId, graph_index::NodeRecord>,
+    edge_properties: &HashMap<EdgeId, graph_index::EdgeRecord>,
+) {
+    let is_edge = alias_is_edge
+        .get(order_by.alias.as_str())
+        .copied()
+        .unwrap_or(false);
+
+    let key = |binding: &Binding| -> Option<PropertyValue> {
+        if is_edge {
+            binding
+                .edges
+                .get(&order_by.alias)
+                .and_then(|id| edge_properties.get(id))
+                .and_then(|record| record.properties.get(&order_by.property))
+                .cloned()
+        } else {
+            binding
+                .nodes
+                .get(&order_by.alias)
+                .and_then(|id| node_properties.get(id))
+                .and_then(|record| record.properties.get(&order_by.property))
+                .cloned()
+        }
+    };
+
+    bindings.sort_by(|a, b| {
+        let ordering = match (key(a), key(b)) {
+            (Some(a), Some(b)) => compare_property_values(&a, &b),
+            // A binding whose sort-key alias/property never resolves at
+            // all (the alias wasn't reached by this row, vanishingly
+            // unlikely given every alias in a `Binding` comes from the
+            // same matched pattern, but not provably impossible for an
+            // optional edge alias) sorts after every binding that does —
+            // same "NULLS LAST" convention as an unset optional property,
+            // below.
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+        match order_by.direction {
+            SortDirection::Asc => ordering,
+            SortDirection::Desc => ordering.reverse(),
+        }
+    });
+}
+
+/// Orders two [`PropertyValue`]s that the validator (D14) has already
+/// confirmed come from the same declared, non-composite scalar type
+/// (`alias.property` always resolves to one type per the active schema —
+/// two rows can't disagree). [`PropertyValue::Null`] (an optional
+/// property left unset on one row) sorts after any concrete value, same
+/// convention as the missing-key case in `sort_bindings_by_property`.
+fn compare_property_values(a: &PropertyValue, b: &PropertyValue) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (PropertyValue::Null, PropertyValue::Null) => Ordering::Equal,
+        (PropertyValue::Null, _) => Ordering::Greater,
+        (_, PropertyValue::Null) => Ordering::Less,
+        (PropertyValue::Int64(a), PropertyValue::Int64(b)) => a.cmp(b),
+        (PropertyValue::Float64(a), PropertyValue::Float64(b)) => {
+            a.partial_cmp(b).unwrap_or(Ordering::Equal)
+        }
+        (PropertyValue::Bool(a), PropertyValue::Bool(b)) => a.cmp(b),
+        (PropertyValue::String(a), PropertyValue::String(b)) => a.cmp(b),
+        (PropertyValue::Timestamp(a), PropertyValue::Timestamp(b)) => a.cmp(b),
+        (PropertyValue::Bytes(a), PropertyValue::Bytes(b)) => a.cmp(b),
+        // Mismatched-variant fallback: unreachable through the validated
+        // path above, kept only so this match stays exhaustive rather
+        // than panicking on the odd row out (`List` included here, since
+        // `PropertyValue` itself has no separate "not sortable" marker —
+        // the validator is what actually keeps List/Vector properties out
+        // of `ORDER BY` before execution ever starts).
+        _ => Ordering::Equal,
+    }
 }
 
 fn int64_value(id: u64) -> ProtoValue {

@@ -200,8 +200,8 @@ compare deux alias liés, pas une propriété, donc ne peut pas réutiliser
 `PropertyFilter`.
 
 **Reste à faire (Phase 0).**
-- Grammaire formelle complète (`ORDER BY`, `LIMIT`, pagination — encore
-  `TBD` dans le spec §7.1).
+- Pagination (curseur repris d'un appel à l'autre) — toujours `TBD` dans
+  le spec §7.1 ; `ORDER BY`/`LIMIT` sont faits, voir D14/D15 ci-dessous.
 
 **Fait (extension hors roadmap, D10-D13).** Alias d'arête (`[g:GRANTS]`,
 restreint à un hop fixe — un alias sur `*1..3` désignerait une arête
@@ -218,6 +218,17 @@ case concret (moindre privilège via télémétrie,
 sous-requêtes. Détail complet des décisions (pourquoi un hop sortant
 seulement, pourquoi pas de `datetime()`) dans `TASKS.md` et
 `ARCHITECTURE.md` §6.
+
+**Fait (extension hors roadmap, D14/D15 — ferme le TBD `ORDER BY`/`LIMIT`
+de spec §7.1).** `OrderBy { alias, property, direction }` (une seule clé
+de tri) et `Query::limit: Option<u64>`. Grammaire/parser dans `dsl.pest`/
+`parser.rs` ; validation dans `validator.rs` réutilise
+`validate_property_ref` (même artifice `Eq`-placeholder que
+`validate_return_item`), ce qui rejette au passage un tri sur
+`List`/`Vector` sans nouveau type d'erreur dédié. Ni l'un ni l'autre ne
+touche `graph-query`/`graph-proto` : les deux sont appliqués directement
+par `bin/graph-coordinator` sur la `Query` déjà parsée, voir cette
+section plus bas. Détail complet dans `TASKS.md`.
 
 ---
 
@@ -477,6 +488,20 @@ choisir entre projection d'enregistrement complet (alias nu) et
 projection scalaire unique (`alias.propriété`). `GrpcPartitionRpc` gagne
 `resolve_all`/`get_edge_properties`/`check_anti_join`, symétriques des
 RPC déjà câblées pour Q5-Q8.
+
+**Fait (extension hors roadmap, D14/D15).** `execute_query` applique
+`query.order_by`/`query.limit` (déjà disponibles sur la `Query` parsée
+en tout début de fonction) au jeu de bindings déjà rassemblé et
+déjà hydraté — après `GetNodeProperties`/`GetEdgeProperties`, avant la
+construction de la projection finale. `sort_bindings_by_property`
+résout l'alias de tri au nœud ou à l'arête exactement comme la
+projection `RETURN` le fait déjà (`alias_is_edge`), étendu pour couvrir
+un alias de tri absent de `RETURN` — son id est ajouté aux lots
+`GetNodeProperties`/`GetEdgeProperties` au même titre que les alias
+projetés. `compare_property_values` trie par variante de
+`PropertyValue`, `Null` toujours en dernier quelle que soit la
+direction. Testé bout en bout sur du vrai gRPC
+(`tests/order_by_limit_end_to_end.rs`, même forme que CO4/LP1).
 
 ---
 

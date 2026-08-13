@@ -609,6 +609,81 @@ seul point d'usage, et le DSL reste sans fonctions au sens large (§7.1).
 
 ---
 
+## Extension DSL hors roadmap — `ORDER BY`/`LIMIT` — ✅ terminé
+
+> **Jalon** : ferme le dernier TBD explicite de spec §7.1 pour ces deux
+> clauses (« Encore hors scope, TBD : ORDER BY/LIMIT/pagination des
+> résultats »). Pagination (curseur repris d'un appel à l'autre) reste
+> `TBD` — pas couverte ici, voir décision D15 ci-dessous pour pourquoi.
+> Vérifié bout en bout sur du vrai gRPC
+> (`bin/graph-coordinator/tests/order_by_limit_end_to_end.rs`), même
+> forme que CO4/LP1 : deux clauses, un seul process partition + un seul
+> coordinateur, requête réelle à travers le fil.
+
+- ✅ **D14** — `ORDER BY alias.property [ASC|DESC]` : grammaire (`dsl.pest`,
+  `order_by_clause`/`sort_direction`), AST (`OrderBy`, `SortDirection`,
+  `Query::order_by`), parser, validateur. *Décision* : une seule clé de
+  tri, pas une liste façon SQL — aucune des formes de requête prioritaires
+  ni le cas d'usage moindre-privilège n'ont besoin d'un tie-breaker, et
+  une deuxième clé (`("," ~ order_by_key)*`) resterait une extension non
+  cassante de la grammaire le jour où un cas d'usage réel en aurait
+  besoin — pas anticipée par précaution. *Décision (validateur)* :
+  réutilise `validate_property_ref` avec `Eq` comme opérateur
+  placeholder, exactement le même artifice que `validate_return_item`
+  utilisait déjà — l'existence alias/propriété est ce qui compte, et
+  cela rejette au passage un tri sur `List`/`Vector` (types composites
+  §3.2 sans ordre défini), puisque `Eq`/`Ne` les exclut déjà dans
+  `operator_compatible`. Pas de nouveau type d'erreur dédié : réutilise
+  `ValidationError::UnknownAlias`/`UnknownProperty`/`IncompatibleOperator`
+  existants plutôt que d'ajouter `UnsortableProperty` pour un cas déjà
+  couvert.
+- ✅ **D15** — `LIMIT <n>` : grammaire (`limit_clause`, réutilise la règle
+  `number` déjà utilisée par `hop_range` — un `LIMIT` négatif n'a pas de
+  sens), AST (`Query::limit: Option<u64>`), parser. Pas de validation
+  dédiée : un entier non négatif n'a pas de contrainte à vérifier contre
+  le schéma.
+- ✅ **Application (`bin/graph-coordinator`, `service.rs`)** — *Décision
+  la plus significative de cette extension* : `ORDER BY`/`LIMIT` sont
+  appliqués au coordinateur, sur le jeu de bindings déjà rassemblé et
+  déjà hydraté par le scatter-gather (Q5-Q7) — **avant** la projection
+  finale, **après** `GetNodeProperties`/`GetEdgeProperties`. Pas de
+  passage par `QueryPlan`/`PlanStep` : `execute_query` a déjà la `Query`
+  parsée sous la main au moment de streamer les résultats, et
+  `order_by`/`limit` ne concernent que la forme des lignes déjà
+  résolues — un aller-retour par `graph-query`/`graph-proto` n'aurait
+  ajouté aucune capacité, juste un détour. Conséquence assumée et
+  documentée dans le code : un `ORDER BY` **matérialise tout le jeu de
+  résultats avant de streamer quoi que ce soit** — contrairement au
+  `WHERE` post-hop (Q6) qui reste dans le flux existant, un tri global ne
+  peut être correct qu'une fois toutes les lignes en main. `LIMIT` seul
+  (sans `ORDER BY`) ne paie pas ce coût : il tronque l'ordre déjà produit
+  par le scatter-gather, sans repasser dessus. *Décision (pushdown)* :
+  ni l'un ni l'autre n'est poussé dans `ResolveStart`/`ExpandHop` — même
+  posture que Q6 pour `WHERE` (correction et un seul chemin de code
+  d'abord ; pousser `LIMIT` vers chaque partition pour réduire le trafic
+  réseau reste une optimisation future documentée, pas tentée ici).
+  Résolution de l'alias de tri (nœud vs arête) réutilise exactement le
+  même mécanisme que la projection `RETURN` (observer dans quelle map
+  d'un binding l'alias apparaît) et l'étend pour couvrir un alias de tri
+  qui ne serait pas lui-même dans `RETURN`
+  (`RETURN friend ORDER BY p.name`) — son id est ajouté aux lots
+  `GetNodeProperties`/`GetEdgeProperties` au même titre que les alias
+  projetés, pour un seul aller-retour par partition propriétaire, pas un
+  second. *Décision (NULLS)* : une propriété optionnelle absente
+  (`PropertyValue::Null`) ou un alias qui ne résout pour une raison
+  quelconque sur aucune valeur trie toujours en dernier, quelle que soit
+  la direction — convention « NULLS LAST » la plus répandue côté SQL,
+  choisie pour ne pas surprendre.
+- ✅ **Pagination** : toujours `TBD`, non traitée par cette extension.
+  *Décision de scope* : `LIMIT` couvre déjà le besoin « top N » le plus
+  courant ; un curseur repris d'un appel à l'autre demanderait un état
+  côté serveur résumable à travers des générations d'index qui changent
+  (rebuild périodique, §5.3) — complexité qu'aucun cas d'usage courant du
+  moteur ne démontre à ce jour, documentée ici comme gap plutôt que
+  masquée.
+
+---
+
 ## Vue d'ensemble des dépendances inter-crates
 
 ```

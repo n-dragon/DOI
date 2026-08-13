@@ -218,10 +218,31 @@ Fait (Phase 2, spec §12) — détail des décisions dans `TASKS.md` :
   aucune régression, plus de code séparé à maintenir pour le cas
   mono-partition.
 
+Fait (extension hors roadmap, D14/D15, ferme le TBD `ORDER BY`/`LIMIT` de
+spec §7.1) :
+- `ORDER BY alias.property [ASC|DESC]` (une seule clé de tri) et
+  `LIMIT <n>` (`graph-dsl`, grammaire + AST + validateur). Appliqués côté
+  `bin/graph-coordinator` (`execute_query`), sur le jeu de bindings déjà
+  rassemblé/hydraté par le scatter-gather (Q5-Q7), avant projection —
+  pas de passage par `graph-query`/`graph-proto`, `execute_query` a déjà
+  la `Query` parsée sous la main au bon moment. *Décision* : un `ORDER
+  BY` matérialise tout le résultat avant de streamer (contrairement au
+  `WHERE` post-hop, Q6, qui reste dans le flux) — un tri global ne peut
+  être correct qu'une fois toutes les lignes en main ; `LIMIT` seul ne
+  paie pas ce coût. Aucun pushdown vers `ResolveStart`/`ExpandHop` — même
+  posture que Q6. Détail complet (résolution de l'alias de tri,
+  convention NULLS LAST, pourquoi la pagination reste `TBD`) dans
+  `TASKS.md`. Vérifié bout en bout sur du vrai gRPC
+  (`bin/graph-coordinator/tests/order_by_limit_end_to_end.rs`).
+
 Reste à faire :
 - Le seul TBD encore ouvert côté spec (§13) : processus de migration de
   schéma incompatible — sans impact sur cette architecture, à traiter au
   moment venu.
+- Pagination (curseur repris d'un appel à l'autre) — `LIMIT` (ci-dessus)
+  couvre le besoin « top N » le plus courant ; un curseur résumable à
+  travers des générations d'index qui changent (rebuild périodique) est
+  un gap documenté, pas un TBD bloquant (`TASKS.md`).
 - Non couvert par ce cadrage (Phase 3+, spec §12) : réplication/HA
   opérée pour de vrai (le modèle §6.4 est implémenté — répliques
   indépendantes, pas de consensus — mais pas encore exercé par un test

@@ -3,9 +3,12 @@
 //!
 //! Deliberately excludes aggregation (`COUNT`, `SUM`, `GROUP BY`, ...) —
 //! `RETURN` only projects matched nodes/edges/properties, it never reduces
-//! them (§1.3, §7.1). Full grammar (aliases, `ORDER BY`, `LIMIT`,
-//! pagination) is still `TBD` — this AST covers the two prioritized shapes
-//! only: filtered k-hop neighborhood and pattern matching.
+//! them (§1.3, §7.1). This AST covers the two prioritized shapes (filtered
+//! k-hop neighborhood and pattern matching), the least-privilege-via-
+//! telemetry extension (edge aliases, cross-alias property comparison,
+//! `NOT EXISTS`), and `ORDER BY`/`LIMIT` (tasks D14/D15, closing spec
+//! §7.1's own TBD for those two). Pagination (a resumable cursor) and
+//! `OR` in `WHERE` remain `TBD`.
 
 mod grammar;
 mod parser;
@@ -154,12 +157,36 @@ pub struct ReturnItem {
     pub property: Option<String>,
 }
 
-/// A full query: `MATCH <pattern> [WHERE <conditions>] RETURN <projection>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+/// `ORDER BY alias.property [ASC|DESC]` (task D14). A single sort key —
+/// deliberately narrower than SQL's comma-separated key list: neither
+/// prioritized query shape (§7.1) nor the least-privilege use case needs
+/// a tiebreaker, and `graph-coordinator` applies this by sorting the
+/// fully-gathered, already-hydrated result set in memory (see its
+/// `execute_query` doc comment) — a second key is a straightforward,
+/// non-breaking grammar extension (`("," ~ order_by_key)*`) if a real
+/// query ever needs one, not worth anticipating here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrderBy {
+    pub alias: String,
+    pub property: String,
+    pub direction: SortDirection,
+}
+
+/// A full query: `MATCH <pattern> [WHERE <conditions>] RETURN <projection>
+/// [ORDER BY <alias.property> [ASC|DESC]] [LIMIT <n>]`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub pattern: Pattern,
     pub where_conditions: Vec<WhereCondition>,
     pub returns: Vec<ReturnItem>, // no aggregation (§7.1)
+    pub order_by: Option<OrderBy>,
+    pub limit: Option<u64>,
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -60,6 +60,10 @@ impl Validator for SchemaValidator {
             validate_return_item(item, schema, &scope, &mut errors);
         }
 
+        if let Some(order_by) = &query.order_by {
+            validate_order_by(order_by, schema, &scope, &mut errors);
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -234,6 +238,29 @@ fn validate_return_item(
         schema,
         &item.alias,
         property,
+        ComparisonOp::Eq,
+        errors,
+    );
+}
+
+/// *(task D14)* `alias.property` must resolve the same way a `RETURN
+/// alias.property` item does — same helper, same `Eq`-as-placeholder
+/// trick as `validate_return_item` (existence is what matters here, not
+/// operator compatibility) which also, as a side effect, rejects a
+/// `List`/`Vector` property (§3.2's two composite types have no defined
+/// ordering — `operator_compatible` already excludes them from `Eq`/`Ne`,
+/// the same exclusion an ordering comparison would need).
+fn validate_order_by(
+    order_by: &crate::OrderBy,
+    schema: &Schema,
+    scope: &Scope,
+    errors: &mut Vec<ValidationError>,
+) {
+    validate_property_ref(
+        scope,
+        schema,
+        &order_by.alias,
+        &order_by.property,
         ComparisonOp::Eq,
         errors,
     );
@@ -623,6 +650,45 @@ mod tests {
             .validate(&q, &least_privilege_schema())
             .unwrap_err();
         assert!(errors.contains(&ValidationError::NestedNotExists));
+    }
+
+    /// *(task D14)* A valid `ORDER BY alias.property` passes.
+    #[test]
+    fn a_valid_order_by_passes() {
+        let q = query(
+            r#"
+            MATCH (p:Person)-[:KNOWS*1..3]->(friend:Person)
+            RETURN friend ORDER BY friend.birth_year DESC
+            "#,
+        );
+
+        assert_eq!(SchemaValidator.validate(&q, &schema()), Ok(()));
+    }
+
+    /// *(task D14)* `ORDER BY` on an alias the pattern never bound is
+    /// reported the same way an unbound `RETURN`/`WHERE` alias is.
+    #[test]
+    fn an_order_by_on_an_unbound_alias_fails() {
+        let q = query("MATCH (p:Person) RETURN p ORDER BY ghost.name");
+
+        let errors = SchemaValidator.validate(&q, &schema()).unwrap_err();
+        assert_eq!(errors, vec![ValidationError::UnknownAlias("ghost".into())]);
+    }
+
+    /// *(task D14)* `ORDER BY` on a property the label doesn't declare is
+    /// reported.
+    #[test]
+    fn an_order_by_on_an_unknown_property_fails() {
+        let q = query("MATCH (p:Person) RETURN p ORDER BY p.nickname");
+
+        let errors = SchemaValidator.validate(&q, &schema()).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![ValidationError::UnknownProperty {
+                label: "Person".into(),
+                property: "nickname".into(),
+            }]
+        );
     }
 
     /// `RETURN g.action` (edge alias property) validates against the

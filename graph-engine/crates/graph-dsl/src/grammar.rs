@@ -103,6 +103,24 @@ mod tests {
         DslGrammar::parse(Rule::query, source).expect("RETURN alias.property should parse");
     }
 
+    /// *(task D14/D15)* `ORDER BY ... LIMIT n` after `RETURN`.
+    #[test]
+    fn accepts_order_by_and_limit() {
+        let source =
+            "MATCH (p:Person)-[:KNOWS*1..3]->(friend:Person) RETURN friend ORDER BY friend.birth_year DESC LIMIT 10";
+
+        DslGrammar::parse(Rule::query, source).expect("ORDER BY ... LIMIT n should parse");
+    }
+
+    /// `LIMIT` alone (no `ORDER BY`) also parses — the two clauses are
+    /// independently optional.
+    #[test]
+    fn accepts_a_bare_limit() {
+        let source = "MATCH (p:Person) RETURN p LIMIT 5";
+
+        DslGrammar::parse(Rule::query, source).expect("a bare LIMIT should parse");
+    }
+
     #[test]
     fn rejects_a_not_exists_clause_missing_its_closing_brace() {
         let source = r#"

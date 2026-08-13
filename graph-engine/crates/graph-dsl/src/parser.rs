@@ -4,8 +4,8 @@
 use crate::grammar::{DslGrammar, Rule};
 use crate::{
     ComparisonOp, Direction, DslError, EdgePattern, ExistsSubquery, HopRange, Literal, NodePattern,
-    Parser as DslParser, Pattern, PatternStep, PropertyFilter, PropertyRef, Query, ReturnItem,
-    WhereCondition,
+    OrderBy, Parser as DslParser, Pattern, PatternStep, PropertyFilter, PropertyRef, Query,
+    ReturnItem, SortDirection, WhereCondition,
 };
 use graph_schema::{EdgeType, Label};
 use pest::error::InputLocation;
@@ -35,15 +35,20 @@ impl DslParser for PestParser {
         let mut pattern = None;
         let mut where_conditions = Vec::new();
         let mut returns = Vec::new();
+        let mut order_by = None;
+        let mut limit = None;
 
         for p in query_pair.into_inner() {
             match p.as_rule() {
                 Rule::pattern => pattern = Some(parse_pattern(p)),
                 Rule::where_clause => where_conditions = parse_where_clause(p),
                 Rule::return_clause => returns = parse_return_clause(p),
+                Rule::order_by_clause => order_by = Some(parse_order_by_clause(p)),
+                Rule::limit_clause => limit = Some(parse_limit_clause(p)),
                 Rule::EOI => {}
                 other => unreachable!(
-                    "query only yields pattern/where_clause/return_clause/EOI, got {other:?}"
+                    "query only yields pattern/where_clause/return_clause/order_by_clause/\
+                     limit_clause/EOI, got {other:?}"
                 ),
             }
         }
@@ -52,6 +57,8 @@ impl DslParser for PestParser {
             pattern: pattern.expect("grammar requires a pattern after MATCH"),
             where_conditions,
             returns,
+            order_by,
+            limit,
         })
     }
 }
@@ -345,6 +352,43 @@ fn parse_return_item(pair: Pair<Rule>) -> ReturnItem {
     let property = inner.next().map(|p| p.as_str().to_string());
 
     ReturnItem { alias, property }
+}
+
+fn parse_order_by_clause(pair: Pair<Rule>) -> OrderBy {
+    let mut inner = pair.into_inner();
+    let alias = inner
+        .next()
+        .expect("order_by_clause always starts with its alias ident")
+        .as_str()
+        .to_string();
+    let property = inner
+        .next()
+        .expect("order_by_clause always has a property ident")
+        .as_str()
+        .to_string();
+    let direction = match inner.next() {
+        Some(d) => match d.as_str() {
+            "ASC" => SortDirection::Asc,
+            "DESC" => SortDirection::Desc,
+            other => unreachable!("sort_direction alternatives are exhaustive, got {other:?}"),
+        },
+        None => SortDirection::Asc, // omitted direction defaults to ASC, same as SQL
+    };
+
+    OrderBy {
+        alias,
+        property,
+        direction,
+    }
+}
+
+fn parse_limit_clause(pair: Pair<Rule>) -> u64 {
+    pair.into_inner()
+        .next()
+        .expect("limit_clause always has a number")
+        .as_str()
+        .parse()
+        .expect("the `number` rule only matches ASCII digits")
 }
 
 fn parse_literal(pair: Pair<Rule>) -> Literal {
@@ -696,6 +740,58 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// *(task D14/D15)* `ORDER BY alias.property DESC LIMIT n` parses
+    /// into `Query::order_by`/`Query::limit`.
+    #[test]
+    fn parses_order_by_and_limit() {
+        let query = PestParser
+            .parse(
+                "MATCH (p:Person)-[:KNOWS*1..3]->(friend:Person) \
+                 RETURN friend ORDER BY friend.birth_year DESC LIMIT 10",
+            )
+            .expect("valid DSL should parse");
+
+        assert_eq!(
+            query.order_by,
+            Some(OrderBy {
+                alias: "friend".into(),
+                property: "birth_year".into(),
+                direction: SortDirection::Desc,
+            })
+        );
+        assert_eq!(query.limit, Some(10));
+    }
+
+    /// *(task D14)* An omitted sort direction defaults to `ASC`; `LIMIT`
+    /// is independently optional (`ORDER BY` with no `LIMIT` at all).
+    #[test]
+    fn order_by_direction_defaults_to_ascending_and_limit_is_independent() {
+        let query = PestParser
+            .parse("MATCH (p:Person) RETURN p ORDER BY p.name")
+            .expect("valid DSL should parse");
+
+        assert_eq!(
+            query.order_by,
+            Some(OrderBy {
+                alias: "p".into(),
+                property: "name".into(),
+                direction: SortDirection::Asc,
+            })
+        );
+        assert_eq!(query.limit, None);
+    }
+
+    /// *(task D15)* `LIMIT` alone, with no `ORDER BY` at all, also parses.
+    #[test]
+    fn parses_a_bare_limit_with_no_order_by() {
+        let query = PestParser
+            .parse("MATCH (p:Person) RETURN p LIMIT 5")
+            .expect("valid DSL should parse");
+
+        assert_eq!(query.order_by, None);
+        assert_eq!(query.limit, Some(5));
     }
 
     /// *(task D6)* Syntax errors surface as `DslError::Syntax`.
